@@ -5,6 +5,9 @@ use std::{fs, path::{Path, PathBuf}, process::{Stdio, Command}};
 use tauri::{Emitter, Manager, WebviewWindowBuilder};
 use walkdir::WalkDir;
 
+// Embed the screenshot script at compile time so we don't rely on locating it at runtime
+const SCREENSHOT_TS: &str = include_str!("../../scripts/screenshot.ts");
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CookieConfig {
     name: String,
@@ -76,32 +79,40 @@ async fn run_screenshot_job(
     let cfg_path: PathBuf = out_dir.join("config.json");
     fs::write(&cfg_path, serde_json::to_vec_pretty(&cfg).unwrap()).map_err(|e| e.to_string())?;
 
-    // Resolve the Playwright script robustly in dev/build
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    // common locations
-    candidates.push(cwd.join("scripts/screenshot.ts")); // when cwd is repo root
-    candidates.push(cwd.join("..").join("scripts/screenshot.ts")); // when cwd is src-tauri
-    if let Ok(p) = app.path().resolve("scripts/screenshot.ts", tauri::path::BaseDirectory::Resource) {
-        candidates.push(p);
-    }
-    if let Ok(p) = app.path().resolve("..\\scripts\\screenshot.ts", tauri::path::BaseDirectory::Resource) {
-        candidates.push(p);
-    }
-    let script = candidates
-        .into_iter()
-        .find(|p| p.exists())
-        .unwrap_or_else(|| cwd.join("..").join("scripts/screenshot.ts"));
-    println!("Using screenshot script at {}", script.to_string_lossy());
+    // Materialize the embedded script into the run directory
+    let script = out_dir.join("screenshot.ts");
+    fs::write(&script, SCREENSHOT_TS).map_err(|e| format!("failed to write embedded script: {}", e))?;
+    println!("Using embedded screenshot script at {}", script.to_string_lossy());
 
-    let child = Command::new("bun")
-        .args([
-            "run",
-            script.to_string_lossy().as_ref(),
-            cfg_path.to_string_lossy().as_ref(),
-        ])
+    // Try to find bun explicitly if PATH isn't available in production
+    let mut bun_cmd_candidates: Vec<PathBuf> = vec![
+        PathBuf::from("bun"),
+        PathBuf::from("/opt/homebrew/bin/bun"),
+        PathBuf::from("/usr/local/bin/bun"),
+        PathBuf::from("/usr/bin/bun"),
+    ];
+    // Also consider bundling an env var override
+    if let Ok(custom) = std::env::var("BUN_PATH") { bun_cmd_candidates.insert(0, PathBuf::from(custom)); }
+    let bun_cmd = bun_cmd_candidates.into_iter().find(|p| {
+        if p.components().count() == 1 { true } else { p.exists() }
+    }).unwrap_or_else(|| PathBuf::from("bun"));
+
+    // Set the working directory to the application resource dir if available
+    let work_dir = app.path().resource_dir().ok();
+
+    let mut cmd = Command::new(bun_cmd);
+    // Prepend common Homebrew path to PATH so bun is discoverable in sandboxed envs
+    if let Ok(mut path_var) = std::env::var("PATH") {
+        if !path_var.split(':').any(|p| p == "/opt/homebrew/bin") {
+            path_var = format!("{}:{}", "/opt/homebrew/bin", path_var);
+        }
+        cmd.env("PATH", path_var);
+    }
+    let child = cmd
+        .args(["run", script.to_string_lossy().as_ref(), cfg_path.to_string_lossy().as_ref()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .current_dir(work_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))))
         .spawn()
         .map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
@@ -111,7 +122,18 @@ async fn run_screenshot_job(
             let _ = gallery_err.show();
             let _ = gallery_err.set_focus();
         }
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        let mut msg = String::new();
+        if !output.stderr.is_empty() {
+            msg.push_str(&String::from_utf8_lossy(&output.stderr));
+        }
+        if !output.stdout.is_empty() {
+            if !msg.is_empty() { msg.push_str("\n"); }
+            msg.push_str(&String::from_utf8_lossy(&output.stdout));
+        }
+        if msg.is_empty() {
+            msg = "Screenshot process failed with unknown error".to_string();
+        }
+        return Err(msg);
     }
 
     let manifest_path = out_dir.join("manifest.json");

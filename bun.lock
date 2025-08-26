@@ -6,6 +6,7 @@
       "dependencies": {
         "@sveltejs/kit": "^2.5.0",
         "@tauri-apps/api": "^2.0.0",
+        "@tauri-apps/plugin-dialog": "^2.3.3",
         "@tauri-apps/plugin-shell": "^2.0.0",
         "clsx": "^2.1.1",
         "panzoom": "9",
@@ -211,6 +212,8 @@
     "@tauri-apps/cli-win32-ia32-msvc": ["@tauri-apps/cli-win32-ia32-msvc@2.8.3", "", { "os": "win32", "cpu": "ia32" }, "sha512-aIP38i2KeADboPD1wsBFYdodEQ9PIJe0HW2urd3ocHpGxF8gX/KMiGOwGVSobu9gFlCpFNoVwCX6J1S5pJCRIQ=="],
 
     "@tauri-apps/cli-win32-x64-msvc": ["@tauri-apps/cli-win32-x64-msvc@2.8.3", "", { "os": "win32", "cpu": "x64" }, "sha512-Z+H+PwK+3yMffG1rN7iqs+uPo6FkPyHJ4MTtFhnEvvGzc3aH711bwFb6+PXwMXfOb/jPR/LB+o6kEXghBu9ynQ=="],
+
+    "@tauri-apps/plugin-dialog": ["@tauri-apps/plugin-dialog@2.3.3", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-cWXB9QJDbLIA0v7I5QY183awazBEQNPhp19iPvrMZoJRX8SbFkhWFx1/q7zy7xGpXXzxz29qtq6z21Ho7W5Iew=="],
 
     "@tauri-apps/plugin-shell": ["@tauri-apps/plugin-shell@2.3.1", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-jjs2WGDO/9z2pjNlydY/F5yYhNsscv99K5lCmU5uKjsVvQ3dRlDhhtVYoa4OLDmktLtQvgvbQjCFibMl6tgGfw=="],
 

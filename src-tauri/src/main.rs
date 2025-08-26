@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process::{Stdio, Command}};
+use std::{fs, path::{Path, PathBuf}, process::{Stdio, Command}};
 use tauri::{Emitter, Manager, WebviewWindowBuilder};
+use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CookieConfig {
@@ -136,10 +137,107 @@ async fn run_screenshot_job(
     Ok(out_dir.to_string_lossy().to_string())
 }
 
+#[derive(Debug, Deserialize)]
+struct ExportArgs {
+    #[serde(alias = "runDir")] run_dir: String,
+    #[serde(alias = "destZip")] dest_zip: String,
+}
+
+#[tauri::command]
+async fn export_gallery(app: tauri::AppHandle, args: ExportArgs) -> Result<(), String> {
+    let run_path = PathBuf::from(args.run_dir);
+    if !run_path.exists() { return Err("run_dir does not exist".into()); }
+    let file = fs::File::create(&args.dest_zip).map_err(|e| e.to_string())?;
+    let mut zipw = zip::ZipWriter::new(file);
+    let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let base = run_path.clone();
+    for entry in WalkDir::new(&run_path).into_iter().filter_map(|e| e.ok()) {
+        let p = entry.path();
+        let rel = p.strip_prefix(&base).unwrap_or(p);
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if p.is_dir() {
+            if !rel_str.is_empty() { zipw.add_directory(rel_str, options).map_err(|e| e.to_string())?; }
+        } else if p.is_file() {
+            zipw.start_file(rel_str, options).map_err(|e| e.to_string())?;
+            let bytes = fs::read(p).map_err(|e| e.to_string())?;
+            use std::io::Write;
+            zipw.write_all(&bytes).map_err(|e| e.to_string())?;
+        }
+    }
+    zipw.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportArgs {
+    #[serde(alias = "srcZip")] src_zip: String,
+}
+
+#[tauri::command]
+async fn import_gallery(app: tauri::AppHandle, args: ImportArgs) -> Result<String, String> {
+    let runs_dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("runs");
+    fs::create_dir_all(&runs_dir).map_err(|e| e.to_string())?;
+    let file = fs::File::open(&args.src_zip).map_err(|e| e.to_string())?;
+    let mut zipr = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let run_id = format!("import-{}", chrono::Utc::now().timestamp());
+    let out_dir = runs_dir.join(&run_id);
+    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    for i in 0..zipr.len() {
+        let mut f = zipr.by_index(i).map_err(|e| e.to_string())?;
+        let out_path = out_dir.join(Path::new(f.name()));
+        if f.name().ends_with('/') {
+            fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = out_path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+            use std::io::Write;
+            let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
+            std::io::copy(&mut f, &mut outfile).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(out_dir.to_string_lossy().to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenDirArgs {
+    #[serde(alias = "runDir")] run_dir: String,
+}
+
+#[tauri::command]
+async fn open_gallery_from_dir(app: tauri::AppHandle, args: OpenDirArgs) -> Result<(), String> {
+    // Ensure gallery window exists
+    if app.get_webview_window("gallery").is_none() {
+        let _ = WebviewWindowBuilder::new(&app, "gallery", tauri::WebviewUrl::App("/gallery".into()))
+            .title("Gallery")
+            .build();
+    }
+    let manifest_path = PathBuf::from(&args.run_dir).join("manifest.json");
+    let manifest_str = fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+    let manifest_json: serde_json::Value = serde_json::from_str(&manifest_str).map_err(|e| e.to_string())?;
+    if let Some(gallery) = app.get_webview_window("gallery") {
+        let _ = gallery.emit("shots:loaded", &manifest_json);
+        let _ = gallery.show();
+        let _ = gallery.set_focus();
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenZipArgs {
+    #[serde(alias = "srcZip")] src_zip: String,
+}
+
+#[tauri::command]
+async fn open_gallery_from_zip(app: tauri::AppHandle, args: OpenZipArgs) -> Result<String, String> {
+    let run_dir = import_gallery(app.clone(), ImportArgs { src_zip: args.src_zip.clone() }).await?;
+    open_gallery_from_dir(app, OpenDirArgs { run_dir: run_dir.clone() }).await.map_err(|e| e.to_string())?;
+    Ok(run_dir)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![run_screenshot_job])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![run_screenshot_job, export_gallery, import_gallery, open_gallery_from_dir, open_gallery_from_zip])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

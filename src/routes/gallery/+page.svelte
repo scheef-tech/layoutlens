@@ -1,6 +1,7 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
-  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+  import { open, save } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
   import panzoom from "panzoom";
   import type { RunManifest, Shot } from "$lib/types";
@@ -32,7 +33,8 @@
         // Disable internal wheel handling; we implement Figma-style below
         beforeWheel: () => true,
       });
-      pz.setTransform(0, 0, zoom);
+      pz.moveTo(0, 0);
+      pz.zoomAbs(0, 0, zoom);
       pz.on("transform", () => {
         if (!pz) return;
         const t = pz.getTransform();
@@ -78,6 +80,41 @@
       pz.smoothZoomAbs(x, y, clamped);
     }
   }
+
+  async function exportZip() {
+    if (!manifest) return;
+    const dest = await save({
+      title: "Export gallery as ZIP",
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+      defaultPath: `layoutlens-${manifest.id}.zip`,
+    });
+    if (!dest) return;
+    await invoke("export_gallery", {
+      args: {
+        run_dir: manifest.out_dir,
+        dest_zip: dest,
+      },
+    });
+    alert("Exported gallery");
+  }
+
+  async function importZip() {
+    const src = await open({
+      multiple: false,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+      title: "Import gallery ZIP",
+    });
+    if (!src || Array.isArray(src)) return;
+    const outDir = await invoke<string>("import_gallery", {
+      args: { src_zip: src },
+    });
+    // Load its manifest
+    const manifestPath = `${outDir}/manifest.json`;
+    const res = await fetch(convertFileSrc(manifestPath));
+    const data = (await res.json()) as RunManifest;
+    manifest = data;
+    shotList = data.shots;
+  }
 </script>
 
 <div
@@ -104,7 +141,15 @@
         {/each}
       {/if}
     </select>
-    <div class="ml-auto">Zoom: {Math.round(zoom * 100)}%</div>
+    <button class="ml-auto border rounded px-2 py-1" onclick={() => importZip()}
+      >Import</button
+    >
+    <button
+      class="border rounded px-2 py-1"
+      onclick={() => exportZip()}
+      disabled={!manifest}>Export</button
+    >
+    <div>Zoom: {Math.round(zoom * 100)}%</div>
   </div>
   <div class="relative h-[calc(100vh-44px)] w-full bg-neutral-50">
     <div

@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Default capabilities for LayoutLens",
   "windows": ["main", "gallery"],
-  "permissions": ["core:default", "shell:allow-execute", "shell:allow-spawn"]
+  "permissions": [
+    "core:default",
+    "shell:allow-execute",
+    "shell:allow-spawn",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
 }

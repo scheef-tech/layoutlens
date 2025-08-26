@@ -3,6 +3,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
+  import { open } from "@tauri-apps/plugin-dialog";
 
   let url = $state("http://localhost:5174/");
   let breakpointsInput = $state("320,768,1024,1280,1920,2400");
@@ -70,6 +71,26 @@
     } finally {
       running = false;
     }
+  }
+
+  async function openGalleryZip() {
+    const src = await open({
+      multiple: false,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+      title: "Open gallery ZIP",
+    });
+    if (!src || Array.isArray(src)) return;
+    await invoke("open_gallery_from_zip", { args: { src_zip: src } });
+  }
+
+  async function openGalleryDir() {
+    const src = await open({
+      directory: true,
+      multiple: false,
+      title: "Open gallery directory",
+    });
+    if (!src || Array.isArray(src)) return;
+    await invoke("open_gallery_from_dir", { args: { run_dir: src } });
   }
 </script>
 
@@ -160,7 +181,11 @@
     </div>
   </fieldset>
 
-  <Button onclick={() => runCapture()} disabled={running}>
-    {running ? "Running…" : "Capture"}
-  </Button>
+  <div class="flex gap-2">
+    <Button onclick={() => runCapture()} disabled={running}>
+      {running ? "Running…" : "Capture"}
+    </Button>
+    <Button onclick={() => openGalleryZip()}>Open Gallery ZIP</Button>
+    <Button onclick={() => openGalleryDir()}>Open Gallery Dir</Button>
+  </div>
 </div>

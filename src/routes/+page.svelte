@@ -4,7 +4,7 @@
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
 
-  let url = $state(" http://localhost:5174/");
+  let url = $state("http://localhost:5174/");
   let breakpointsInput = $state("320,1024");
   // let breakpointsInput = $state("320,375,414,768,1024,1280,1440");
   let localesInput = $state("en,de");
@@ -13,7 +13,8 @@
     name: "PARAGLIDE_LOCALE",
     domain: "",
     path: "/",
-    sameSite: "None" as "Lax" | "Strict" | "None",
+    // Default to Lax which works without requiring Secure in Chromium
+    sameSite: "Lax" as "Lax" | "Strict" | "None",
     secure: false,
     httpOnly: false,
   });

@@ -1,4 +1,4 @@
-import { chromium, firefox, webkit, type Browser } from "playwright";
+import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { mkdirSync, writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 
@@ -43,53 +43,121 @@ async function run(cfg: Config) {
 
   mkdirSync(cfg.outDir, { recursive: true });
 
-  for (const locale of cfg.locales) {
-    const headers = cfg.behavior.sendAcceptLanguage
-      ? { "Accept-Language": locale }
-      : undefined;
-    const context = await browser.newContext({ extraHTTPHeaders: headers });
+  // Parallelize per-locale and per-breakpoint work aggressively
+  await Promise.all(
+    cfg.locales.map(async (locale) => {
+      const headers = cfg.behavior.sendAcceptLanguage
+        ? { "Accept-Language": locale }
+        : undefined;
+      const context = await browser.newContext({ extraHTTPHeaders: headers });
 
-    const domain =
-      cfg.cookie.domain || new URL(cfg.url).hostname || "localhost";
-    const path = cfg.cookie.path ?? "/";
-    await context.addCookies([
-      {
-        name: cfg.cookie.name,
-        value: locale,
-        domain,
-        path,
-        sameSite: cfg.cookie.sameSite as any,
-        secure: Boolean(cfg.cookie.secure),
-        httpOnly: Boolean(cfg.cookie.httpOnly),
-      },
-    ]);
+      const base = new URL(cfg.url.trim());
+      const host = base.hostname || "localhost";
+      const isLocalhost = host === "localhost" || host === "127.0.0.1";
+      const domain = cfg.cookie.domain || host;
+      const path = cfg.cookie.path ?? "/";
+      // Chromium blocks SameSite=None without Secure. For localhost we can keep Secure=false.
+      const requestedSameSite = cfg.cookie.sameSite ?? "Lax";
+      const sameSite = requestedSameSite;
+      const secure =
+        requestedSameSite === "None"
+          ? !isLocalhost
+          : Boolean(cfg.cookie.secure);
+      const httpOnly = Boolean(cfg.cookie.httpOnly);
+      await context.addCookies([
+        {
+          name: cfg.cookie.name,
+          value: locale,
+          domain,
+          path,
+          sameSite: sameSite as any,
+          secure,
+          httpOnly,
+        },
+      ]);
 
-    const page = await context.newPage();
-    for (const bp of cfg.breakpoints) {
-      const url = buildUrl(cfg.url, cfg.behavior, locale);
-      await page.setViewportSize({ width: bp, height: 1000 });
-      await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+      // Open multiple pages concurrently for breakpoints
       const dir = join(cfg.outDir, locale);
       mkdirSync(dir, { recursive: true });
-      const out = join(dir, `${bp}.png`);
-      await page.screenshot({ path: out, fullPage: true });
-      manifest.shots.push({
-        locale,
-        breakpoint: bp,
-        path: out,
-        width: bp,
-        height: 0,
-        ok: true,
-      });
-    }
-    await context.close();
-  }
+
+      await Promise.all(
+        cfg.breakpoints.map(async (bp) => {
+          const page = await context.newPage();
+          try {
+            const url = buildUrl(cfg.url, cfg.behavior, locale);
+            await page.setViewportSize({ width: bp, height: 1000 });
+            await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+            // Trigger lazy-loaded content by scrolling through the page
+            await autoScroll(page);
+            await waitForImages(page);
+            const out = join(dir, `${bp}.png`);
+            await page.screenshot({ path: out, fullPage: true });
+            manifest.shots.push({
+              locale,
+              breakpoint: bp,
+              path: out,
+              width: bp,
+              height: 0,
+              ok: true,
+            });
+          } finally {
+            await page.close();
+          }
+        })
+      );
+
+      await context.close();
+    })
+  );
 
   writeFileSync(
     join(cfg.outDir, "manifest.json"),
     JSON.stringify(manifest, null, 2)
   );
   await browser.close();
+}
+
+async function autoScroll(page: Page) {
+  await page.evaluate(async () => {
+    const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const getMaxScroll = () =>
+      Math.max(
+        document.body.scrollHeight,
+        document.documentElement.scrollHeight
+      );
+    const viewport = window.innerHeight || 800;
+    const step = Math.max(Math.floor(viewport * 0.8), 200);
+    let prev = -1;
+    for (let y = 0; y < getMaxScroll(); y += step) {
+      window.scrollTo(0, y);
+      await delay(120);
+      const cur = getMaxScroll();
+      if (cur === prev) continue;
+      prev = cur;
+    }
+    // Ensure bottom reached
+    window.scrollTo(0, getMaxScroll());
+    await delay(200);
+    // Return to top for consistent screenshots
+    window.scrollTo(0, 0);
+    await delay(100);
+  });
+}
+
+async function waitForImages(page: Page) {
+  await page.evaluate(async () => {
+    const imgs = Array.from(document.images);
+    await Promise.all(
+      imgs.map((img) => {
+        if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          const done = () => resolve();
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        });
+      })
+    );
+  });
 }
 
 function buildUrl(

@@ -13,6 +13,8 @@
   let canvasEl: HTMLDivElement;
   let wrapperEl: HTMLDivElement;
   let pz: ReturnType<typeof panzoom> | null = null;
+  const MIN_Z = 0.1;
+  const MAX_Z = 3;
 
   onMount(() => {
     const unlistenPromise = listen<RunManifest>("shots:loaded", (e) => {
@@ -23,16 +25,12 @@
     // Initialize Panzoom on first mount
     if (!pz && canvasEl) {
       pz = panzoom(canvasEl, {
-        maxZoom: 3,
-        minZoom: 0.1,
+        maxZoom: MAX_Z,
+        minZoom: MIN_Z,
         zoomDoubleClickSpeed: 1,
         smoothScroll: false,
-        // Only zoom with wheel when Cmd/Meta (or Ctrl) is held – Figma-style
-        beforeWheel: (ev: WheelEvent) => {
-          const wantZoom = ev.metaKey || ev.ctrlKey;
-          // return true to ignore the wheel (so we can pan instead)
-          return !wantZoom;
-        },
+        // Disable internal wheel handling; we implement Figma-style below
+        beforeWheel: () => true,
       });
       pz.setTransform(0, 0, zoom);
       pz.on("transform", () => {
@@ -66,8 +64,19 @@
       e.preventDefault();
       // Natural trackpad scrolling pans the canvas
       pz.moveBy(-e.deltaX, -e.deltaY, false);
+    } else {
+      e.preventDefault();
+      const current = pz.getTransform().scale;
+      const zoomFactor =
+        1 + Math.min(Math.max(Math.abs(e.deltaY) / 500, 0.05), 0.5);
+      const next = e.deltaY < 0 ? current * zoomFactor : current / zoomFactor;
+      const clamped = Math.max(MIN_Z, Math.min(MAX_Z, next));
+      // Zoom centered at the cursor position (relative to wrapper)
+      const rect = wrapperEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      pz.smoothZoomAbs(x, y, clamped);
     }
-    // when wantZoom, Panzoom will handle it via beforeWheel=false
   }
 </script>
 
@@ -100,7 +109,7 @@
   <div class="relative h-[calc(100vh-44px)] w-full bg-neutral-50">
     <div
       bind:this={canvasEl}
-      class="absolute left-1/2 top-1/2"
+      class="absolute left-0 top-0"
       style="transform-origin: 0 0;"
     >
       <div class="flex flex-nowrap gap-8">

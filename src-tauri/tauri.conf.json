@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/2.0/cli/schema.json",
+  "productName": "LayoutLens",
+  "version": "0.1.0",
+  "identifier": "com.layoutlens.app",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "build"
+  },
+  "app": {
+    "windows": [
+      { "label": "main", "title": "LayoutLens", "url": "/" },
+      { "label": "gallery", "title": "Gallery", "url": "/gallery" }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}
+
+

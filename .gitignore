@@ -32,3 +32,21 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# SvelteKit generated
+.svelte-kit/
+build/
+
+# Vite cache
+.vite/
+
+# Tailwind cache (v4)
+.tailwind/
+
+# Tauri build outputs
+src-tauri/target/
+src-tauri/gen/
+
+# Playwright artifacts
+playwright-report/
+.test-results/

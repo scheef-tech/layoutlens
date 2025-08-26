@@ -1,5 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
 
   let url = $state("");
   let breakpointsInput = $state("320,375,414,768,1024,1280,1440");
@@ -50,40 +53,36 @@
 <div class="p-6 max-w-3xl mx-auto space-y-6">
   <h1 class="text-2xl font-semibold">LayoutLens</h1>
   <div class="space-y-3">
-    <label>URL</label>
-    <input
-      class="border rounded p-2 w-full"
-      bind:value={url}
-      placeholder="http://localhost:5173"
-    />
+    <Label>URL</Label>
+    <Input bind:value={url} placeholder="http://localhost:5173" />
   </div>
   <div class="grid grid-cols-2 gap-4">
     <div class="space-y-3">
-      <label>Breakpoints (comma)</label>
-      <input class="border rounded p-2 w-full" bind:value={breakpointsInput} />
+      <Label>Breakpoints (comma)</Label>
+      <Input bind:value={breakpointsInput} />
     </div>
     <div class="space-y-3">
-      <label>Locales (comma)</label>
-      <input class="border rounded p-2 w-full" bind:value={localesInput} />
+      <Label>Locales (comma)</Label>
+      <Input bind:value={localesInput} />
     </div>
   </div>
   <fieldset class="border rounded p-4 space-y-3">
     <legend class="px-2">Cookie</legend>
     <div class="grid grid-cols-2 gap-4">
       <div>
-        <label>Name</label>
-        <input class="border rounded p-2 w-full" bind:value={cookie.name} />
+        <Label>Name</Label>
+        <Input bind:value={cookie.name} />
       </div>
       <div>
-        <label>Domain (optional)</label>
-        <input class="border rounded p-2 w-full" bind:value={cookie.domain} />
+        <Label>Domain (optional)</Label>
+        <Input bind:value={cookie.domain} />
       </div>
       <div>
-        <label>Path</label>
-        <input class="border rounded p-2 w-full" bind:value={cookie.path} />
+        <Label>Path</Label>
+        <Input bind:value={cookie.path} />
       </div>
       <div>
-        <label>SameSite</label>
+        <Label>SameSite</Label>
         <select class="border rounded p-2 w-full" bind:value={cookie.sameSite}>
           <option value="Lax">Lax</option>
           <option value="Strict">Strict</option>
@@ -111,18 +110,13 @@
       <input type="checkbox" bind:checked={behavior.useUrlTemplate} />
       <span>Use URL template</span>
     </div>
-    <input
-      class="border rounded p-2 w-full"
+    <Input
       bind:value={behavior.urlTemplate}
       placeholder="/{locale}{pathname} or ?lang={locale}"
     />
   </fieldset>
 
-  <button
-    class="px-4 py-2 bg-black text-white rounded"
-    on:click={runCapture}
-    disabled={running}
-  >
+  <Button on:click={runCapture} disabled={running}>
     {running ? "Running…" : "Capture"}
-  </button>
+  </Button>
 </div>

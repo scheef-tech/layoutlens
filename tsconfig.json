@@ -12,10 +12,6 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["svelte", "vite/client"],
-    "paths": {
-      "$lib": ["./src/lib"],
-      "$lib/*": ["./src/lib/*"]
-    }
+    "types": ["svelte", "vite/client"]
   }
 }

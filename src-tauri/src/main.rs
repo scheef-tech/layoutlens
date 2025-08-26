@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process::Stdio};
+use std::{fs, path::PathBuf, process::{Stdio, Command}};
 use tauri::{Emitter, Manager, WebviewWindowBuilder};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -61,12 +61,22 @@ async fn run_screenshot_job(
     let script = app
         .path()
         .resolve("scripts/screenshot.ts", tauri::path::BaseDirectory::Resource)
-        .or_else(|_| app.path().resolve("scripts/screenshot.ts", tauri::path::BaseDirectory::App))
-        .map_err(|e| e.to_string())?;
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("scripts/screenshot.ts")
+        });
 
-    let mut cmd = tauri::shell::Command::new("bun");
-    cmd = cmd.args(["run", script.to_string_lossy().as_ref(), cfg_path.to_string_lossy().as_ref()]);
-    let child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    let child = Command::new("bun")
+        .args([
+            "run",
+            script.to_string_lossy().as_ref(),
+            cfg_path.to_string_lossy().as_ref(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());

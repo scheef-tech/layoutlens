@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/2.0/cli/schema/capability.json",
+  "identifier": "default",
+  "description": "Default capabilities for LayoutLens",
+  "windows": ["main", "gallery"],
+  "permissions": ["core:default", "shell:allow-execute", "shell:allow-spawn"]
+}

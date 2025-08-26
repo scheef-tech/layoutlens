@@ -73,10 +73,11 @@ async fn run_screenshot_job(
     }
 
     let manifest_path = out_dir.join("manifest.json");
-    let manifest = fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+    let manifest_str = fs::read_to_string(&manifest_path).map_err(|e| e.to_string())?;
+    let manifest_json: serde_json::Value = serde_json::from_str(&manifest_str).map_err(|e| e.to_string())?;
 
     if let Some(gallery) = app.get_webview_window("gallery") {
-        let _ = gallery.emit("shots:loaded", manifest.clone());
+        let _ = gallery.emit("shots:loaded", &manifest_json);
         let _ = gallery.show();
         let _ = gallery.set_focus();
     } else {
@@ -84,7 +85,7 @@ async fn run_screenshot_job(
             .title("Gallery")
             .build();
         if let Some(gallery2) = app.get_webview_window("gallery") {
-            let _ = gallery2.emit("shots:loaded", manifest.clone());
+            let _ = gallery2.emit("shots:loaded", &manifest_json);
             let _ = gallery2.show();
         }
     }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
   import type { RunManifest, Shot } from "$lib/types";
 
   let manifest = $state<RunManifest | null>(null);
@@ -10,9 +11,14 @@
   let offsetX = $state(0);
   let offsetY = $state(0);
 
-  listen<RunManifest>("shots:loaded", (e) => {
-    manifest = e.payload;
-    shotList = e.payload.shots;
+  onMount(() => {
+    const unlistenPromise = listen<RunManifest>("shots:loaded", (e) => {
+      manifest = e.payload;
+      shotList = e.payload.shots;
+    });
+    return () => {
+      unlistenPromise.then((un) => un());
+    };
   });
 
   const filtered = $derived(
@@ -28,10 +34,10 @@
   }
 </script>
 
-<div class="h-screen w-screen overflow-hidden" on:wheel|passive={onWheel}>
+<div class="h-screen w-screen overflow-hidden" onwheel|passive={onWheel}>
   <div class="p-3 flex gap-3 items-center border-b">
-    <label>Locale</label>
-    <select class="border rounded p-1" bind:value={selectedLocale}>
+    <label for="locale">Locale</label>
+    <select id="locale" class="border rounded p-1" bind:value={selectedLocale}>
       <option>All</option>
       {#if manifest}
         {#each manifest.locales as loc}
@@ -39,8 +45,8 @@
         {/each}
       {/if}
     </select>
-    <label>Breakpoint</label>
-    <select class="border rounded p-1" bind:value={selectedBreakpoint}>
+    <label for="bp">Breakpoint</label>
+    <select id="bp" class="border rounded p-1" bind:value={selectedBreakpoint}>
       <option>All</option>
       {#if manifest}
         {#each manifest.breakpoints as bp}

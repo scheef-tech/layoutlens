@@ -9,16 +9,21 @@ struct CookieConfig {
     name: String,
     domain: Option<String>,
     path: Option<String>,
-    sameSite: Option<String>,
+    #[serde(rename = "sameSite")]
+    same_site: Option<String>,
     secure: Option<bool>,
-    httpOnly: Option<bool>,
+    #[serde(rename = "httpOnly")]
+    http_only: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct BehaviorFlags {
-    sendAcceptLanguage: Option<bool>,
-    urlTemplate: Option<String>,
-    useUrlTemplate: Option<bool>,
+    #[serde(rename = "sendAcceptLanguage")]
+    send_accept_language: Option<bool>,
+    #[serde(rename = "urlTemplate")]
+    url_template: Option<String>,
+    #[serde(rename = "useUrlTemplate")]
+    use_url_template: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

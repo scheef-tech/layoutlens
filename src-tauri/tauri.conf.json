@@ -10,10 +10,7 @@
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [
-      { "label": "main", "title": "LayoutLens", "url": "/" },
-      { "label": "gallery", "title": "Gallery", "url": "/gallery" }
-    ]
+    "windows": [{ "label": "main", "title": "LayoutLens", "url": "/" }]
   },
   "bundle": {
     "active": true,

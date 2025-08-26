@@ -5,9 +5,9 @@
   import { Label } from "$lib/components/ui/label/index.js";
 
   let url = $state("http://localhost:5174/");
-  let breakpointsInput = $state("320,1024");
+  let breakpointsInput = $state("320,768,1024,1280,1920,2400");
   // let breakpointsInput = $state("320,375,414,768,1024,1280,1440");
-  let localesInput = $state("en,de");
+  let localesInput = $state("en,de,es");
   // let localesInput = $state("en,de,es");
   let cookie = $state({
     name: "PARAGLIDE_LOCALE",
@@ -23,6 +23,10 @@
     useUrlTemplate: false,
     urlTemplate: "",
   });
+  // Performance / concurrency
+  let maxConcurrentPagesInput = $state("6");
+  let persistentCache = $state(true);
+  let profileDirInput = $state(".playwright-profile");
   let running = $state(false);
 
   function parseNumbers(input: string): number[] {
@@ -54,6 +58,9 @@
         locales,
         cookie,
         behavior,
+        // snake_case keys to match Rust parameter names
+        profile_dir: persistentCache ? profileDirInput : null,
+        max_concurrent_pages: Number(maxConcurrentPagesInput) || undefined,
       });
       console.log("Capture finished");
     } catch (e) {
@@ -130,6 +137,27 @@
       bind:value={behavior.urlTemplate}
       placeholder="/&#123;locale&#125;&#123;pathname&#125; or ?lang=&#123;locale&#125;"
     />
+  </fieldset>
+
+  <fieldset class="border rounded p-4 space-y-3">
+    <legend class="px-2">Performance</legend>
+    <div class="grid grid-cols-2 gap-4">
+      <div class="space-y-2">
+        <Label>Max concurrent pages</Label>
+        <Input bind:value={maxConcurrentPagesInput} />
+      </div>
+      <div class="space-y-2">
+        <Label>Use persistent cache</Label>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" bind:checked={persistentCache} />
+          <span>Reuse cache between runs</span>
+        </div>
+      </div>
+      <div class="space-y-2 col-span-2">
+        <Label>Profile directory</Label>
+        <Input bind:value={profileDirInput} />
+      </div>
+    </div>
   </fieldset>
 
   <Button onclick={() => runCapture()} disabled={running}>

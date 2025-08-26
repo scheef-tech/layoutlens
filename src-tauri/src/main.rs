@@ -45,6 +45,9 @@ async fn run_screenshot_job(
     locales: Vec<String>,
     cookie: CookieConfig,
     behavior: BehaviorFlags,
+    // Optional tuning (argument names must match keys from the frontend)
+    profile_dir: Option<String>,
+    max_concurrent_pages: Option<u32>,
 ) -> Result<String, String> {
     // Ensure gallery window exists early so the user sees it opening immediately
     if app.get_webview_window("gallery").is_none() {
@@ -65,6 +68,8 @@ async fn run_screenshot_job(
         "cookie": cookie,
         "behavior": behavior,
         "outDir": out_dir.to_string_lossy(),
+        "profileDir": profile_dir,
+        "maxConcurrentPages": max_concurrent_pages,
     });
 
     let cfg_path: PathBuf = out_dir.join("config.json");

@@ -1,4 +1,11 @@
-import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
+import {
+  chromium,
+  firefox,
+  webkit,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "playwright";
 import { mkdirSync, writeFileSync, readFileSync } from "fs";
 import { join } from "path";
 
@@ -21,14 +28,40 @@ type Config = {
   };
   outDir: string;
   engine?: "chromium" | "webkit" | "firefox";
+  // Optional: use a persistent profile directory to enable disk cache reuse across runs
+  profileDir?: string | null;
+  // Optional: limit concurrent pages per locale to avoid network thrashing
+  maxConcurrentPages?: number;
 };
 
 async function run(cfg: Config) {
-  const browser: Browser = await (cfg.engine === "webkit"
-    ? webkit.launch()
-    : cfg.engine === "firefox"
-    ? firefox.launch()
-    : chromium.launch());
+  // Create a single shared context so HTTP cache is reused across all pages/locales
+  let browser: Browser | null = null;
+  let context: BrowserContext;
+
+  const usePersistent = Boolean(cfg.profileDir);
+  if (cfg.engine === "webkit") {
+    if (usePersistent) {
+      context = await webkit.launchPersistentContext(String(cfg.profileDir));
+    } else {
+      browser = await webkit.launch();
+      context = await browser.newContext();
+    }
+  } else if (cfg.engine === "firefox") {
+    if (usePersistent) {
+      context = await firefox.launchPersistentContext(String(cfg.profileDir));
+    } else {
+      browser = await firefox.launch();
+      context = await browser.newContext();
+    }
+  } else {
+    if (usePersistent) {
+      context = await chromium.launchPersistentContext(String(cfg.profileDir));
+    } else {
+      browser = await chromium.launch();
+      context = await browser.newContext();
+    }
+  }
 
   const manifest: any = {
     id: String(Date.now()),
@@ -43,78 +76,80 @@ async function run(cfg: Config) {
 
   mkdirSync(cfg.outDir, { recursive: true });
 
-  // Parallelize per-locale and per-breakpoint work aggressively
-  await Promise.all(
-    cfg.locales.map(async (locale) => {
-      const headers = cfg.behavior.sendAcceptLanguage
-        ? { "Accept-Language": locale }
-        : undefined;
-      const context = await browser.newContext({ extraHTTPHeaders: headers });
+  // Process locales sequentially to avoid cookie races while still sharing the cache
+  for (const locale of cfg.locales) {
+    const headers: Record<string, string> = {};
+    if (cfg.behavior.sendAcceptLanguage) {
+      headers["Accept-Language"] = locale;
+    }
+    await context.setExtraHTTPHeaders(headers);
 
-      const base = new URL(cfg.url.trim());
-      const host = base.hostname || "localhost";
-      const isLocalhost = host === "localhost" || host === "127.0.0.1";
-      const domain = cfg.cookie.domain || host;
-      const path = cfg.cookie.path ?? "/";
-      // Chromium blocks SameSite=None without Secure. For localhost we can keep Secure=false.
-      const requestedSameSite = cfg.cookie.sameSite ?? "Lax";
-      const sameSite = requestedSameSite;
-      const secure =
-        requestedSameSite === "None"
-          ? !isLocalhost
-          : Boolean(cfg.cookie.secure);
-      const httpOnly = Boolean(cfg.cookie.httpOnly);
-      await context.addCookies([
-        {
-          name: cfg.cookie.name,
-          value: locale,
-          domain,
-          path,
-          sameSite: sameSite as any,
-          secure,
-          httpOnly,
-        },
-      ]);
+    const base = new URL(cfg.url.trim());
+    const host = base.hostname || "localhost";
+    const isLocalhost = host === "localhost" || host === "127.0.0.1";
+    const domain = cfg.cookie.domain || host;
+    const path = cfg.cookie.path ?? "/";
+    const requestedSameSite = cfg.cookie.sameSite ?? "Lax";
+    const sameSite = requestedSameSite;
+    const secure =
+      requestedSameSite === "None" ? !isLocalhost : Boolean(cfg.cookie.secure);
+    const httpOnly = Boolean(cfg.cookie.httpOnly);
 
-      // Open multiple pages concurrently for breakpoints
-      const dir = join(cfg.outDir, locale);
-      mkdirSync(dir, { recursive: true });
+    // Ensure we only have the intended locale cookie set
+    await context.clearCookies();
+    await context.addCookies([
+      {
+        name: cfg.cookie.name,
+        value: locale,
+        domain,
+        path,
+        sameSite: sameSite as any,
+        secure,
+        httpOnly,
+      },
+    ]);
 
-      await Promise.all(
-        cfg.breakpoints.map(async (bp) => {
-          const page = await context.newPage();
-          try {
-            const url = buildUrl(cfg.url, cfg.behavior, locale);
-            await page.setViewportSize({ width: bp, height: 1000 });
-            await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
-            // Trigger lazy-loaded content by scrolling through the page
-            await autoScroll(page);
-            await waitForImages(page);
-            const out = join(dir, `${bp}.png`);
-            await page.screenshot({ path: out, fullPage: true });
-            manifest.shots.push({
-              locale,
-              breakpoint: bp,
-              path: out,
-              width: bp,
-              height: 0,
-              ok: true,
-            });
-          } finally {
-            await page.close();
-          }
-        })
-      );
+    const dir = join(cfg.outDir, locale);
+    mkdirSync(dir, { recursive: true });
 
-      await context.close();
-    })
-  );
+    const concurrency = Math.max(
+      1,
+      Math.min(cfg.maxConcurrentPages ?? 4, cfg.breakpoints.length)
+    );
+    await runWithConcurrency(cfg.breakpoints, concurrency, async (bp) => {
+      const page = await context.newPage();
+      try {
+        const url = buildUrl(cfg.url, cfg.behavior, locale);
+        await page.setViewportSize({ width: bp, height: 1000 });
+        await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+        await autoScroll(page);
+        await waitForImages(page);
+        const out = join(dir, `${bp}.png`);
+        await page.screenshot({ path: out, fullPage: true });
+        manifest.shots.push({
+          locale,
+          breakpoint: bp,
+          path: out,
+          width: bp,
+          height: 0,
+          ok: true,
+        });
+      } finally {
+        await page.close();
+      }
+    });
+  }
 
   writeFileSync(
     join(cfg.outDir, "manifest.json"),
     JSON.stringify(manifest, null, 2)
   );
-  await browser.close();
+  if (browser) {
+    await context.close();
+    await browser.close();
+  } else {
+    await context.close();
+  }
 }
 
 async function autoScroll(page: Page) {
@@ -184,6 +219,23 @@ function buildUrl(
     }
   }
   return baseUrl;
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>
+) {
+  const queue = [...items];
+  const workers = Array.from({ length: Math.min(limit, queue.length) }).map(
+    async () => {
+      while (queue.length) {
+        const next = queue.shift() as T;
+        await worker(next);
+      }
+    }
+  );
+  await Promise.all(workers);
 }
 
 if (import.meta.main) {

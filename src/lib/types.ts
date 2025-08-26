@@ -17,7 +17,7 @@ export type RunManifest = {
     name: string;
     domain?: string;
     path?: string;
-    sameSite?: 'Lax' | 'Strict' | 'None';
+    sameSite?: "Lax" | "Strict" | "None";
     secure?: boolean;
     httpOnly?: boolean;
   };
@@ -29,5 +29,3 @@ export type RunManifest = {
   out_dir: string;
   shots: Shot[];
 };
-
-

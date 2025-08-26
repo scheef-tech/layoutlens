@@ -30,11 +30,12 @@
   );
 
   function onWheel(e: WheelEvent) {
+    e.passive();
     zoom = Math.max(0.1, Math.min(3, zoom + (e.deltaY > 0 ? -0.05 : 0.05)));
   }
 </script>
 
-<div class="h-screen w-screen overflow-hidden" onwheel|passive={onWheel}>
+<div class="h-screen w-screen overflow-hidden" onwheel={(e) => onWheel(e)}>
   <div class="p-3 flex gap-3 items-center border-b">
     <label for="locale">Locale</label>
     <select id="locale" class="border rounded p-1" bind:value={selectedLocale}>

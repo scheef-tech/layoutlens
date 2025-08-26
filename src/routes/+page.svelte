@@ -4,14 +4,14 @@
   import { Input } from "$lib/components/ui/input/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
 
-  let url = $state("");
+  let url = $state(" http://localhost:5174/");
   let breakpointsInput = $state("320,375,414,768,1024,1280,1440");
   let localesInput = $state("en,de,fr");
   let cookie = $state({
-    name: "locale",
+    name: "PARAGLIDE_LOCALE",
     domain: "",
     path: "/",
-    sameSite: "Lax" as "Lax" | "Strict" | "None",
+    sameSite: "None" as "Lax" | "Strict" | "None",
     secure: false,
     httpOnly: false,
   });
@@ -36,17 +36,30 @@
   }
 
   async function runCapture() {
+    if (!url) {
+      console.warn("URL is required");
+      return;
+    }
     running = true;
     const breakpoints = parseNumbers(breakpointsInput);
     const locales = parseStrings(localesInput);
-    await invoke("run_screenshot_job", {
-      url,
-      breakpoints,
-      locales,
-      cookie,
-      behavior,
-    });
-    running = false;
+    try {
+      console.log("Starting capture", { url, breakpoints, locales });
+      await invoke("run_screenshot_job", {
+        url,
+        breakpoints,
+        locales,
+        cookie,
+        behavior,
+      });
+      console.log("Capture finished");
+    } catch (e) {
+      console.error("Capture failed", e);
+      // optional: show a minimal UI hint
+      alert("Capture failed. See console for details.");
+    } finally {
+      running = false;
+    }
   }
 </script>
 
@@ -112,11 +125,11 @@
     </div>
     <Input
       bind:value={behavior.urlTemplate}
-      placeholder="/{locale}{pathname} or ?lang={locale}"
+      placeholder="/&#123;locale&#125;&#123;pathname&#125; or ?lang=&#123;locale&#125;"
     />
   </fieldset>
 
-  <Button on:click={runCapture} disabled={running}>
+  <Button onclick={() => runCapture()} disabled={running}>
     {running ? "Running…" : "Capture"}
   </Button>
 </div>

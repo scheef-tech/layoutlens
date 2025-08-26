@@ -63,14 +63,23 @@ async fn run_screenshot_job(
     let cfg_path: PathBuf = out_dir.join("config.json");
     fs::write(&cfg_path, serde_json::to_vec_pretty(&cfg).unwrap()).map_err(|e| e.to_string())?;
 
-    let script = app
-        .path()
-        .resolve("scripts/screenshot.ts", tauri::path::BaseDirectory::Resource)
-        .unwrap_or_else(|_| {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join("scripts/screenshot.ts")
-        });
+    // Resolve the Playwright script robustly in dev/build
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    // common locations
+    candidates.push(cwd.join("scripts/screenshot.ts")); // when cwd is repo root
+    candidates.push(cwd.join("..").join("scripts/screenshot.ts")); // when cwd is src-tauri
+    if let Ok(p) = app.path().resolve("scripts/screenshot.ts", tauri::path::BaseDirectory::Resource) {
+        candidates.push(p);
+    }
+    if let Ok(p) = app.path().resolve("..\\scripts\\screenshot.ts", tauri::path::BaseDirectory::Resource) {
+        candidates.push(p);
+    }
+    let script = candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .unwrap_or_else(|| cwd.join("..").join("scripts/screenshot.ts"));
+    println!("Using screenshot script at {}", script.to_string_lossy());
 
     let child = Command::new("bun")
         .args([

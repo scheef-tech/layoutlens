@@ -1,5 +1,6 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
+  import { convertFileSrc } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import type { RunManifest, Shot } from "$lib/types";
 
@@ -65,7 +66,10 @@
       <div class="flex flex-wrap gap-8">
         {#each filtered as s}
           <figure class="shadow border bg-white">
-            <img src={s.path} alt={`${s.locale} ${s.breakpoint}`} />
+            <img
+              src={convertFileSrc(s.path)}
+              alt={`${s.locale} ${s.breakpoint}`}
+            />
             <figcaption class="text-xs p-2">
               {s.locale} · {s.breakpoint}px
             </figcaption>

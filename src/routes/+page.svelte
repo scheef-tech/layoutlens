@@ -5,8 +5,10 @@
   import { Label } from "$lib/components/ui/label/index.js";
 
   let url = $state(" http://localhost:5174/");
-  let breakpointsInput = $state("320,375,414,768,1024,1280,1440");
-  let localesInput = $state("en,de,fr");
+  let breakpointsInput = $state("320,1024");
+  // let breakpointsInput = $state("320,375,414,768,1024,1280,1440");
+  let localesInput = $state("en,de");
+  // let localesInput = $state("en,de,es");
   let cookie = $state({
     name: "PARAGLIDE_LOCALE",
     domain: "",

@@ -46,6 +46,13 @@ async fn run_screenshot_job(
     cookie: CookieConfig,
     behavior: BehaviorFlags,
 ) -> Result<String, String> {
+    // Ensure gallery window exists early so the user sees it opening immediately
+    if app.get_webview_window("gallery").is_none() {
+        let _ = WebviewWindowBuilder::new(&app, "gallery", tauri::WebviewUrl::App("/gallery".into()))
+            .title("Gallery")
+            .build();
+    }
+
     let run_id = format!("{}", chrono::Utc::now().timestamp());
     let runs_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let out_dir = runs_dir.join("runs").join(&run_id);
@@ -93,6 +100,11 @@ async fn run_screenshot_job(
         .map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() {
+        // Show gallery window even on error
+        if let Some(gallery_err) = app.get_webview_window("gallery") {
+            let _ = gallery_err.show();
+            let _ = gallery_err.set_focus();
+        }
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
 
@@ -105,12 +117,14 @@ async fn run_screenshot_job(
         let _ = gallery.show();
         let _ = gallery.set_focus();
     } else {
+        // Fallback (should rarely happen because we create it above)
         let _ = WebviewWindowBuilder::new(&app, "gallery", tauri::WebviewUrl::App("/gallery".into()))
             .title("Gallery")
             .build();
         if let Some(gallery2) = app.get_webview_window("gallery") {
             let _ = gallery2.emit("shots:loaded", &manifest_json);
             let _ = gallery2.show();
+            let _ = gallery2.set_focus();
         }
     }
 

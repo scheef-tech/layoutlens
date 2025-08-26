@@ -10,7 +10,20 @@
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "LayoutLens", "url": "/" }]
+    "windows": [{ "label": "main", "title": "LayoutLens", "url": "/" }],
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**"]
+      },
+      "csp": {
+        "default-src": "'self' asset:",
+        "connect-src": "ipc: http://ipc.localhost",
+        "img-src": "'self' asset: http://asset.localhost https://asset.localhost blob: data:",
+        "style-src": "'self' 'unsafe-inline'",
+        "script-src": "'self' 'unsafe-inline'"
+      }
+    }
   },
   "bundle": {
     "active": true,

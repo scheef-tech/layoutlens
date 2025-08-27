@@ -1,0 +1,18 @@
+{
+  "url": "http://localhost:5173/",
+  "breakpoints": [375, 768, 1024, 1440],
+  "locales": ["en"],
+  "cookie": {
+    "name": "locale",
+    "sameSite": "Lax",
+    "secure": false,
+    "httpOnly": false
+  },
+  "behavior": {
+    "sendAcceptLanguage": true,
+    "urlTemplate": null,
+    "useUrlTemplate": false
+  },
+  "outDir": "screenshots",
+  "engine": "chromium"
+}

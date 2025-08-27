@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "resources": [],
     "macOS": {
       "minimumSystemVersion": "13.0"
     }

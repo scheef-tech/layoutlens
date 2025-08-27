@@ -66,7 +66,10 @@
       console.log("Capture finished");
     } catch (e) {
       console.error("Capture failed", e);
-      const msg = typeof e === "string" ? e : (e && (e as any).message) || JSON.stringify(e);
+      const msg =
+        typeof e === "string"
+          ? e
+          : (e && (e as any).message) || JSON.stringify(e);
       alert(`Capture failed: ${msg}`);
     } finally {
       running = false;

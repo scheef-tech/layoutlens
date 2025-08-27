@@ -38,7 +38,6 @@ declare module '$env/static/private' {
 	export const ORIGINAL_XDG_CURRENT_DESKTOP: string;
 	export const TAURI_CLI_VERBOSITY: string;
 	export const ZDOTDIR: string;
-	export const TAURI_ENV_DEBUG: string;
 	export const TERM_SESSION_ID: string;
 	export const ZSH: string;
 	export const npm_config_local_prefix: string;
@@ -65,7 +64,9 @@ declare module '$env/static/private' {
 	export const __CFBundleIdentifier: string;
 	export const PWD: string;
 	export const npm_command: string;
+	export const DISABLE_AUTO_UPDATE: string;
 	export const npm_lifecycle_event: string;
+	export const CURSOR_AGENT: string;
 	export const LANG: string;
 	export const npm_package_name: string;
 	export const ITERM_PROFILE: string;
@@ -76,6 +77,7 @@ declare module '$env/static/private' {
 	export const XPC_SERVICE_NAME: string;
 	export const npm_package_version: string;
 	export const VSCODE_INJECTION: string;
+	export const npm_config_yes: string;
 	export const COLORFGBG: string;
 	export const HOME: string;
 	export const SHLVL: string;
@@ -83,10 +85,12 @@ declare module '$env/static/private' {
 	export const LC_TERMINAL_VERSION: string;
 	export const HOMEBREW_PREFIX: string;
 	export const ITERM_SESSION_ID: string;
+	export const PIP_NO_INPUT: string;
 	export const LESS: string;
 	export const LOGNAME: string;
 	export const MACOSX_DEPLOYMENT_TARGET: string;
 	export const npm_lifecycle_script: string;
+	export const COMPOSER_NO_INTERACTION: string;
 	export const VSCODE_GIT_IPC_HANDLE: string;
 	export const BUN_INSTALL: string;
 	export const npm_config_user_agent: string;
@@ -140,7 +144,6 @@ declare module '$env/dynamic/private' {
 		ORIGINAL_XDG_CURRENT_DESKTOP: string;
 		TAURI_CLI_VERBOSITY: string;
 		ZDOTDIR: string;
-		TAURI_ENV_DEBUG: string;
 		TERM_SESSION_ID: string;
 		ZSH: string;
 		npm_config_local_prefix: string;
@@ -167,7 +170,9 @@ declare module '$env/dynamic/private' {
 		__CFBundleIdentifier: string;
 		PWD: string;
 		npm_command: string;
+		DISABLE_AUTO_UPDATE: string;
 		npm_lifecycle_event: string;
+		CURSOR_AGENT: string;
 		LANG: string;
 		npm_package_name: string;
 		ITERM_PROFILE: string;
@@ -178,6 +183,7 @@ declare module '$env/dynamic/private' {
 		XPC_SERVICE_NAME: string;
 		npm_package_version: string;
 		VSCODE_INJECTION: string;
+		npm_config_yes: string;
 		COLORFGBG: string;
 		HOME: string;
 		SHLVL: string;
@@ -185,10 +191,12 @@ declare module '$env/dynamic/private' {
 		LC_TERMINAL_VERSION: string;
 		HOMEBREW_PREFIX: string;
 		ITERM_SESSION_ID: string;
+		PIP_NO_INPUT: string;
 		LESS: string;
 		LOGNAME: string;
 		MACOSX_DEPLOYMENT_TARGET: string;
 		npm_lifecycle_script: string;
+		COMPOSER_NO_INTERACTION: string;
 		VSCODE_GIT_IPC_HANDLE: string;
 		BUN_INSTALL: string;
 		npm_config_user_agent: string;

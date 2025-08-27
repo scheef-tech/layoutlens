@@ -50,3 +50,4 @@ src-tauri/gen/
 # Playwright artifacts
 playwright-report/
 .test-results/
+screenshots/

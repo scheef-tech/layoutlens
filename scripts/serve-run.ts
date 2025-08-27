@@ -128,6 +128,7 @@ async function handleFile(url: URL): Promise<Response> {
           headers: corsHeaders(),
         });
       const width = dims.width;
+      const height = dims.height;
       const { mkdir, stat } = await import("node:fs/promises");
       const path = await import("node:path");
       const crypto = await import("node:crypto");
@@ -145,26 +146,67 @@ async function handleFile(url: URL): Promise<Response> {
         needsBuild = true;
       }
       if (needsBuild) {
-        // Crop the vertical slice to a temp file
-        const proc = Bun.spawn(
-          [
-            "/usr/bin/sips",
-            "-s",
-            "format",
-            "jpeg",
-            "-c",
-            String(h),
-            String(width),
-            decoded,
-            "--cropOffset",
-            "0",
-            String(top),
-            "--out",
-            outPath,
-          ],
-          { stdout: "pipe", stderr: "pipe" }
-        );
-        const _status = await proc.exited;
+        // Try ffmpeg first (top-left coordinates crop), fallback to sips
+        const ffmpegBins = [
+          "/opt/homebrew/bin/ffmpeg",
+          "/usr/local/bin/ffmpeg",
+          "/usr/bin/ffmpeg",
+          "ffmpeg",
+        ];
+        let cropped = false;
+        for (const bin of ffmpegBins) {
+          try {
+            const p = Bun.spawn(
+              [
+                bin,
+                "-y",
+                "-i",
+                decoded,
+                "-vf",
+                `crop=${width}:${h}:0:${top}`,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                outPath,
+              ],
+              { stdout: "pipe", stderr: "pipe" }
+            );
+            const code = await p.exited;
+            if (typeof code === "number" ? code === 0 : !p.killed) {
+              cropped = true;
+              break;
+            }
+          } catch (_) {
+            /* try next */
+          }
+        }
+        if (!cropped) {
+          // sips fallback: convert top-offset to bottom-left offset
+          const yOffset = Math.max(0, height - top - h);
+          const proc = Bun.spawn(
+            [
+              "/usr/bin/sips",
+              decoded,
+              "--cropOffset",
+              "0",
+              String(yOffset),
+              "-c",
+              String(h),
+              String(width),
+              "-s",
+              "format",
+              "jpeg",
+              "-s",
+              "formatOptions",
+              "100",
+              "--out",
+              outPath,
+            ],
+            { stdout: "pipe", stderr: "pipe" }
+          );
+          const _status = await proc.exited;
+        }
       }
       const resized = Bun.file(outPath);
       if (await resized.exists()) {
@@ -208,4 +250,5 @@ const server = Bun.serve({
 });
 
 console.log(`Serving ${runDir} at http://localhost:${port}`);
-await server.closed;
+
+export {};

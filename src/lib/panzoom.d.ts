@@ -4,7 +4,9 @@ declare module "panzoom" {
     dispose(): void;
     on(event: string, cb: (...args: any[]) => void): void;
     smoothZoomAbs(x: number, y: number, scale: number): void;
+    zoomAbs(x: number, y: number, scale: number): void;
     moveBy(dx: number, dy: number, smooth?: boolean): void;
+    moveTo(x: number, y: number): void;
     getTransform(): { x: number; y: number; scale: number };
     setTransform(x: number, y: number, scale: number): void;
     resume(): void;

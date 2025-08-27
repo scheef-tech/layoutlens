@@ -115,6 +115,14 @@
     manifest = data;
     shotList = data.shots;
   }
+
+  async function openInFigma() {
+    if (!manifest) return;
+    const baseUrl = await invoke<string>("open_figma_importer", {
+      args: { runDir: manifest.out_dir, port: 7777 },
+    });
+    alert(`Opened Figma. Import URL copied: ${baseUrl}`);
+  }
 </script>
 
 <div
@@ -143,6 +151,11 @@
     </select>
     <button class="ml-auto border rounded px-2 py-1" onclick={() => importZip()}
       >Import</button
+    >
+    <button
+      class="border rounded px-2 py-1"
+      onclick={() => openInFigma()}
+      disabled={!manifest}>Open in Figma</button
     >
     <button
       class="border rounded px-2 py-1"

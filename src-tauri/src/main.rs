@@ -7,6 +7,8 @@ use walkdir::WalkDir;
 
 // Embed the screenshot script at compile time so we don't rely on locating it at runtime
 const SCREENSHOT_TS: &str = include_str!("../../scripts/screenshot.ts");
+// Embed the lightweight Bun server that serves a run directory for the Figma plugin
+const SERVE_RUN_TS: &str = include_str!("../../scripts/serve-run.ts");
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CookieConfig {
@@ -255,11 +257,83 @@ async fn open_gallery_from_zip(app: tauri::AppHandle, args: OpenZipArgs) -> Resu
     Ok(run_dir)
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenFigmaImporterArgs {
+    #[serde(alias = "runDir")] run_dir: String,
+    port: Option<u16>,
+}
+
+#[tauri::command]
+async fn open_figma_importer(app: tauri::AppHandle, args: OpenFigmaImporterArgs) -> Result<String, String> {
+    let run_path = PathBuf::from(&args.run_dir);
+    if !run_path.exists() { return Err("run_dir does not exist".into()); }
+
+    // Materialize the embedded server script into the run directory
+    let server_script = run_path.join("serve-run.ts");
+    fs::write(&server_script, SERVE_RUN_TS).map_err(|e| format!("failed to write server script: {}", e))?;
+
+    // Resolve bun command similarly to screenshot job
+    let mut bun_cmd_candidates: Vec<PathBuf> = vec![
+        PathBuf::from("bun"),
+        PathBuf::from("/opt/homebrew/bin/bun"),
+        PathBuf::from("/usr/local/bin/bun"),
+        PathBuf::from("/usr/bin/bun"),
+    ];
+    if let Ok(custom) = std::env::var("BUN_PATH") { bun_cmd_candidates.insert(0, PathBuf::from(custom)); }
+    let bun_cmd = bun_cmd_candidates.into_iter().find(|p| {
+        if p.components().count() == 1 { true } else { p.exists() }
+    }).unwrap_or_else(|| PathBuf::from("bun"));
+
+    let port = args.port.unwrap_or(7777);
+    let base_url = format!("http://localhost:{}", port);
+
+    // Start the Bun server in the background
+    let mut cmd = Command::new(bun_cmd);
+    if let Ok(mut path_var) = std::env::var("PATH") {
+        if !path_var.split(':').any(|p| p == "/opt/homebrew/bin") {
+            path_var = format!("{}:{}", "/opt/homebrew/bin", path_var);
+        }
+        cmd.env("PATH", path_var);
+    }
+    let _child = cmd
+        .args([
+            "run",
+            server_script.to_string_lossy().as_ref(),
+            run_path.to_string_lossy().as_ref(),
+            &port.to_string(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to spawn bun server: {}", e))?;
+
+    // Best-effort: copy the URL to clipboard so the user can paste into plugin if needed
+    #[cfg(target_os = "macos")]
+    {
+        let mut pb = Command::new("/usr/bin/pbcopy");
+        use std::io::Write;
+        if let Ok(mut child) = pb.stdin(Stdio::piped()).spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(base_url.as_bytes());
+            }
+        }
+    }
+
+    // Open Figma to a new file (user should have "Open links in desktop app" enabled)
+    let _ = Command::new("open")
+        .args(["-a", "Figma", "https://www.figma.com/file/new"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    Ok(base_url)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![run_screenshot_job, export_gallery, import_gallery, open_gallery_from_dir, open_gallery_from_zip])
+        .invoke_handler(tauri::generate_handler![run_screenshot_job, export_gallery, import_gallery, open_gallery_from_dir, open_gallery_from_zip, open_figma_importer])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

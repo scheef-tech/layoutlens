@@ -99,10 +99,31 @@ async fn run_screenshot_job(
         if p.components().count() == 1 { true } else { p.exists() }
     }).unwrap_or_else(|| PathBuf::from("bun"));
 
-    // Set the working directory to the application resource dir if available
-    let work_dir = app.path().resource_dir().ok();
+    // Prefer using the project root so the embedded script can resolve local node_modules (playwright)
+    // Fallbacks: try current_dir, then walk up from resource_dir to locate a node_modules with playwright
+    let mut preferred_work_dir: Option<PathBuf> = None;
+    // First, try the current working directory (when running `tauri dev`, this should be the project root)
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join("node_modules/playwright/package.json");
+        if candidate.exists() {
+            preferred_work_dir = Some(cwd);
+        }
+    }
+    // If not found, attempt to walk up from the resource_dir until we find node_modules/playwright
+    if preferred_work_dir.is_none() {
+        if let Ok(mut from) = app.path().resource_dir() {
+            loop {
+                let candidate = from.join("node_modules/playwright/package.json");
+                if candidate.exists() {
+                    preferred_work_dir = Some(from.clone());
+                    break;
+                }
+                if !from.pop() { break; }
+            }
+        }
+    }
 
-    let mut cmd = Command::new(bun_cmd);
+    let mut cmd = Command::new(&bun_cmd);
     // Prepend common Homebrew path to PATH so bun is discoverable in sandboxed envs
     if let Ok(mut path_var) = std::env::var("PATH") {
         if !path_var.split(':').any(|p| p == "/opt/homebrew/bin") {
@@ -110,11 +131,42 @@ async fn run_screenshot_job(
         }
         cmd.env("PATH", path_var);
     }
+    // Ensure Bun/Node can resolve modules from the project root even if the script lives elsewhere
+    if let Some(work_root) = preferred_work_dir.as_ref() {
+        let node_modules = work_root.join("node_modules");
+        cmd.env("NODE_PATH", node_modules);
+    }
+    // Store browsers under node_modules/ms-playwright for deterministic resolution with project Playwright
+    cmd.env("PLAYWRIGHT_BROWSERS_PATH", "0");
+
+    // Preflight: ensure browsers are installed for the resolved Playwright version
+    if let Some(work_root) = preferred_work_dir.as_ref() {
+        let mut install_cmd = Command::new(bun_cmd.clone());
+        if let Ok(mut path_var) = std::env::var("PATH") {
+            if !path_var.split(':').any(|p| p == "/opt/homebrew/bin") {
+                path_var = format!("{}:{}", "/opt/homebrew/bin", path_var);
+            }
+            install_cmd.env("PATH", path_var);
+        }
+        install_cmd
+            .env("NODE_PATH", work_root.join("node_modules"))
+            .env("PLAYWRIGHT_BROWSERS_PATH", "0")
+            .args(["x", "playwright", "install", "chromium", "webkit"]) // use bunx
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .current_dir(work_root)
+            .spawn()
+            .and_then(|mut c| c.wait())
+            .ok();
+    }
     let child = cmd
         .args(["run", script.to_string_lossy().as_ref(), cfg_path.to_string_lossy().as_ref()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .current_dir(work_dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))))
+        .current_dir(
+            preferred_work_dir
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        )
         .spawn()
         .map_err(|e| e.to_string())?;
     let output = child.wait_with_output().map_err(|e| e.to_string())?;
@@ -168,7 +220,7 @@ struct ExportArgs {
 }
 
 #[tauri::command]
-async fn export_gallery(app: tauri::AppHandle, args: ExportArgs) -> Result<(), String> {
+async fn export_gallery(_app: tauri::AppHandle, args: ExportArgs) -> Result<(), String> {
     let run_path = PathBuf::from(args.run_dir);
     if !run_path.exists() { return Err("run_dir does not exist".into()); }
     let file = fs::File::create(&args.dest_zip).map_err(|e| e.to_string())?;
@@ -213,7 +265,6 @@ async fn import_gallery(app: tauri::AppHandle, args: ImportArgs) -> Result<Strin
             fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
         } else {
             if let Some(parent) = out_path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
-            use std::io::Write;
             let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
             std::io::copy(&mut f, &mut outfile).map_err(|e| e.to_string())?;
         }
@@ -264,7 +315,7 @@ struct OpenFigmaImporterArgs {
 }
 
 #[tauri::command]
-async fn open_figma_importer(app: tauri::AppHandle, args: OpenFigmaImporterArgs) -> Result<String, String> {
+async fn open_figma_importer(_app: tauri::AppHandle, args: OpenFigmaImporterArgs) -> Result<String, String> {
     let run_path = PathBuf::from(&args.run_dir);
     if !run_path.exists() { return Err("run_dir does not exist".into()); }
 

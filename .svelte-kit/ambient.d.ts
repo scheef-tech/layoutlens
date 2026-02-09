@@ -26,28 +26,27 @@
  * ```
  */
 declare module '$env/static/private' {
+	export const NVM_INC: string;
 	export const TERM_PROGRAM: string;
 	export const NODE: string;
+	export const NVM_CD_FLAGS: string;
 	export const SHELL: string;
 	export const TERM: string;
+	export const ST_REGISTRY_TOKEN: string;
 	export const HOMEBREW_REPOSITORY: string;
 	export const TMPDIR: string;
 	export const TERM_PROGRAM_VERSION: string;
-	export const CURSOR_TRACE_ID: string;
-	export const MallocNanoZone: string;
-	export const ORIGINAL_XDG_CURRENT_DESKTOP: string;
 	export const TAURI_CLI_VERBOSITY: string;
-	export const ZDOTDIR: string;
 	export const TAURI_ENV_DEBUG: string;
 	export const TERM_SESSION_ID: string;
 	export const ZSH: string;
 	export const npm_config_local_prefix: string;
+	export const NVM_DIR: string;
 	export const USER: string;
 	export const LS_COLORS: string;
 	export const TAURI_ENV_TARGET_TRIPLE: string;
 	export const COMMAND_MODE: string;
 	export const SSH_AUTH_SOCK: string;
-	export const VSCODE_PROFILE_INITIALIZED: string;
 	export const __CF_USER_TEXT_ENCODING: string;
 	export const TERM_FEATURES: string;
 	export const npm_execpath: string;
@@ -61,7 +60,6 @@ declare module '$env/static/private' {
 	export const npm_package_json: string;
 	export const TAURI_ENV_FAMILY: string;
 	export const TAURI_ENV_PLATFORM_VERSION: string;
-	export const USER_ZDOTDIR: string;
 	export const __CFBundleIdentifier: string;
 	export const PWD: string;
 	export const npm_command: string;
@@ -69,17 +67,13 @@ declare module '$env/static/private' {
 	export const LANG: string;
 	export const npm_package_name: string;
 	export const ITERM_PROFILE: string;
-	export const VSCODE_GIT_ASKPASS_EXTRA_ARGS: string;
 	export const XPC_FLAGS: string;
 	export const TAURI_ENV_ARCH: string;
-	export const CLOUDFLARE_API_TOKEN: string;
 	export const XPC_SERVICE_NAME: string;
 	export const npm_package_version: string;
-	export const VSCODE_INJECTION: string;
 	export const COLORFGBG: string;
 	export const HOME: string;
 	export const SHLVL: string;
-	export const VSCODE_GIT_ASKPASS_MAIN: string;
 	export const LC_TERMINAL_VERSION: string;
 	export const HOMEBREW_PREFIX: string;
 	export const ITERM_SESSION_ID: string;
@@ -87,13 +81,11 @@ declare module '$env/static/private' {
 	export const LOGNAME: string;
 	export const MACOSX_DEPLOYMENT_TARGET: string;
 	export const npm_lifecycle_script: string;
-	export const VSCODE_GIT_IPC_HANDLE: string;
 	export const BUN_INSTALL: string;
+	export const NVM_BIN: string;
 	export const npm_config_user_agent: string;
-	export const GIT_ASKPASS: string;
 	export const HOMEBREW_CELLAR: string;
 	export const INFOPATH: string;
-	export const VSCODE_GIT_ASKPASS_NODE: string;
 	export const LC_TERMINAL: string;
 	export const SECURITYSESSIONID: string;
 	export const COLORTERM: string;
@@ -128,28 +120,27 @@ declare module '$env/static/public' {
  */
 declare module '$env/dynamic/private' {
 	export const env: {
+		NVM_INC: string;
 		TERM_PROGRAM: string;
 		NODE: string;
+		NVM_CD_FLAGS: string;
 		SHELL: string;
 		TERM: string;
+		ST_REGISTRY_TOKEN: string;
 		HOMEBREW_REPOSITORY: string;
 		TMPDIR: string;
 		TERM_PROGRAM_VERSION: string;
-		CURSOR_TRACE_ID: string;
-		MallocNanoZone: string;
-		ORIGINAL_XDG_CURRENT_DESKTOP: string;
 		TAURI_CLI_VERBOSITY: string;
-		ZDOTDIR: string;
 		TAURI_ENV_DEBUG: string;
 		TERM_SESSION_ID: string;
 		ZSH: string;
 		npm_config_local_prefix: string;
+		NVM_DIR: string;
 		USER: string;
 		LS_COLORS: string;
 		TAURI_ENV_TARGET_TRIPLE: string;
 		COMMAND_MODE: string;
 		SSH_AUTH_SOCK: string;
-		VSCODE_PROFILE_INITIALIZED: string;
 		__CF_USER_TEXT_ENCODING: string;
 		TERM_FEATURES: string;
 		npm_execpath: string;
@@ -163,7 +154,6 @@ declare module '$env/dynamic/private' {
 		npm_package_json: string;
 		TAURI_ENV_FAMILY: string;
 		TAURI_ENV_PLATFORM_VERSION: string;
-		USER_ZDOTDIR: string;
 		__CFBundleIdentifier: string;
 		PWD: string;
 		npm_command: string;
@@ -171,17 +161,13 @@ declare module '$env/dynamic/private' {
 		LANG: string;
 		npm_package_name: string;
 		ITERM_PROFILE: string;
-		VSCODE_GIT_ASKPASS_EXTRA_ARGS: string;
 		XPC_FLAGS: string;
 		TAURI_ENV_ARCH: string;
-		CLOUDFLARE_API_TOKEN: string;
 		XPC_SERVICE_NAME: string;
 		npm_package_version: string;
-		VSCODE_INJECTION: string;
 		COLORFGBG: string;
 		HOME: string;
 		SHLVL: string;
-		VSCODE_GIT_ASKPASS_MAIN: string;
 		LC_TERMINAL_VERSION: string;
 		HOMEBREW_PREFIX: string;
 		ITERM_SESSION_ID: string;
@@ -189,13 +175,11 @@ declare module '$env/dynamic/private' {
 		LOGNAME: string;
 		MACOSX_DEPLOYMENT_TARGET: string;
 		npm_lifecycle_script: string;
-		VSCODE_GIT_IPC_HANDLE: string;
 		BUN_INSTALL: string;
+		NVM_BIN: string;
 		npm_config_user_agent: string;
-		GIT_ASKPASS: string;
 		HOMEBREW_CELLAR: string;
 		INFOPATH: string;
-		VSCODE_GIT_ASKPASS_NODE: string;
 		LC_TERMINAL: string;
 		SECURITYSESSIONID: string;
 		COLORTERM: string;

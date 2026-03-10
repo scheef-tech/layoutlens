@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build/runtime outputs
+runs/
+dist/
+
+# Logs
+*.log
+
+# OS/editor noise
+.DS_Store
+.vscode/

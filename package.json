@@ -11,6 +11,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "microservice:dev": "cd services/figma-microservice && bun run dev",
+    "microservice:typecheck": "cd services/figma-microservice && bun run typecheck",
     "postinstall": "playwright install chromium webkit"
   },
   "dependencies": {

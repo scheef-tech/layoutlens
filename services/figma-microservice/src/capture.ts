@@ -88,7 +88,16 @@ async function suppressCookieBanners(page: Awaited<ReturnType<BrowserContext["ne
   }
 
   await page.evaluate(() => {
-    const cookieTerms = ["cookie", "consent", "gdpr", "privacy"];
+    const cookieTerms = [
+      "cookie",
+      "consent",
+      "gdpr",
+      "privacy",
+      "zustimmung",
+      "datenschutz",
+      "essenzielle",
+      "essentiell"
+    ];
     const actionTerms = [
       "accept",
       "agree",
@@ -108,6 +117,25 @@ async function suppressCookieBanners(page: Awaited<ReturnType<BrowserContext["ne
     const textOf = (el: Element): string => (el.textContent || "").trim().toLowerCase();
     const hasCookieTerm = (value: string): boolean => cookieTerms.some((term) => value.includes(term));
     const hasActionTerm = (value: string): boolean => actionTerms.some((term) => value.includes(term));
+    const pageText = (document.body.textContent || "").toLowerCase();
+
+    const isLikelyConsentContext = (element: Element): boolean => {
+      const ownText = textOf(element);
+      if (hasCookieTerm(ownText)) {
+        return true;
+      }
+
+      const container = element.closest("[role='dialog'], [role='alertdialog'], section, div, aside");
+      if (!container) {
+        return hasCookieTerm(pageText);
+      }
+      const containerText = textOf(container);
+      if (hasCookieTerm(containerText)) {
+        return true;
+      }
+      const style = window.getComputedStyle(container as HTMLElement);
+      return style.position === "fixed" || style.position === "sticky";
+    };
 
     // Try clicking common consent CTA buttons first (best chance to persist cookie state).
     const buttons = Array.from(
@@ -117,7 +145,10 @@ async function suppressCookieBanners(page: Awaited<ReturnType<BrowserContext["ne
     );
     for (const button of buttons) {
       const text = textOf(button);
-      if (hasActionTerm(text) && hasCookieTerm(document.body.textContent?.toLowerCase() || "")) {
+      if (!hasActionTerm(text)) {
+        continue;
+      }
+      if (isLikelyConsentContext(button) || hasCookieTerm(pageText)) {
         (button as HTMLElement).click();
       }
     }
@@ -130,10 +161,18 @@ async function suppressCookieBanners(page: Awaited<ReturnType<BrowserContext["ne
       "[class*='consent']",
       "[id*='gdpr']",
       "[class*='gdpr']",
+      "[id*='zustimmung']",
+      "[class*='zustimmung']",
+      "[id*='datenschutz']",
+      "[class*='datenschutz']",
       "[aria-label*='cookie']",
       "[aria-label*='consent']",
+      "[aria-label*='zustimmung']",
+      "[aria-label*='datenschutz']",
       "[data-testid*='cookie']",
       "[data-testid*='consent']",
+      "[data-testid*='zustimmung']",
+      "[data-testid*='datenschutz']",
       "[role='dialog']",
       "[role='alertdialog']"
     ];

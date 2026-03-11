@@ -107,6 +107,7 @@ async function placeImageInto(
   rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: image.hash }];
   rect.resize(width, height);
   rect.y = offsetY;
+  rect.locked = true;
   parent.appendChild(rect);
 }
 
@@ -205,7 +206,7 @@ async function importJobToCanvas(baseUrl: string, job: ImportJob, jobReference: 
         frame.layoutMode = "VERTICAL";
         frame.counterAxisSizingMode = "AUTO";
         frame.primaryAxisSizingMode = "AUTO";
-        frame.itemSpacing = 8;
+        frame.itemSpacing = 0;
         frame.fills = [];
 
         let currentY = 0;
@@ -236,6 +237,7 @@ async function importJobToCanvas(baseUrl: string, job: ImportJob, jobReference: 
         }
 
         row.appendChild(frame);
+        frame.locked = true;
         importedCount += 1;
       }
 

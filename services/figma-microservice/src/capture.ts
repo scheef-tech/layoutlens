@@ -81,6 +81,97 @@ export type CaptureRunner = {
   close: () => Promise<void>;
 };
 
+async function suppressCookieBanners(page: Awaited<ReturnType<BrowserContext["newPage"]>>): Promise<void> {
+  const enabled = (getEnv("CAPTURE_HIDE_COOKIE_BANNERS") || "true").toLowerCase();
+  if (!(enabled === "1" || enabled === "true" || enabled === "yes")) {
+    return;
+  }
+
+  await page.evaluate(() => {
+    const cookieTerms = ["cookie", "consent", "gdpr", "privacy"];
+    const actionTerms = [
+      "accept",
+      "agree",
+      "allow all",
+      "got it",
+      "ok",
+      "okay",
+      "continue",
+      "ablehnen",
+      "zustimmen",
+      "akzeptieren",
+      "alle akzeptieren",
+      "nur essenzielle",
+      "essenzielle"
+    ];
+
+    const textOf = (el: Element): string => (el.textContent || "").trim().toLowerCase();
+    const hasCookieTerm = (value: string): boolean => cookieTerms.some((term) => value.includes(term));
+    const hasActionTerm = (value: string): boolean => actionTerms.some((term) => value.includes(term));
+
+    // Try clicking common consent CTA buttons first (best chance to persist cookie state).
+    const buttons = Array.from(
+      document.querySelectorAll(
+        "button, [role='button'], input[type='button'], input[type='submit'], a[role='button']"
+      )
+    );
+    for (const button of buttons) {
+      const text = textOf(button);
+      if (hasActionTerm(text) && hasCookieTerm(document.body.textContent?.toLowerCase() || "")) {
+        (button as HTMLElement).click();
+      }
+    }
+
+    // Hide common cookie/consent containers and overlays.
+    const selectorCandidates = [
+      "[id*='cookie']",
+      "[class*='cookie']",
+      "[id*='consent']",
+      "[class*='consent']",
+      "[id*='gdpr']",
+      "[class*='gdpr']",
+      "[aria-label*='cookie']",
+      "[aria-label*='consent']",
+      "[data-testid*='cookie']",
+      "[data-testid*='consent']",
+      "[role='dialog']",
+      "[role='alertdialog']"
+    ];
+
+    const marked = new Set<Element>();
+    for (const selector of selectorCandidates) {
+      const nodes = Array.from(document.querySelectorAll(selector));
+      for (const node of nodes) {
+        marked.add(node);
+      }
+    }
+
+    for (const node of Array.from(document.querySelectorAll("*"))) {
+      const text = textOf(node);
+      if (!hasCookieTerm(text)) {
+        continue;
+      }
+      const element = node as HTMLElement;
+      const style = window.getComputedStyle(element);
+      if (style.position === "fixed" || style.position === "sticky") {
+        marked.add(node);
+      }
+    }
+
+    for (const node of marked) {
+      const element = node as HTMLElement;
+      element.style.setProperty("display", "none", "important");
+      element.style.setProperty("visibility", "hidden", "important");
+      element.style.setProperty("opacity", "0", "important");
+      element.style.setProperty("pointer-events", "none", "important");
+    }
+
+    // Remove body scroll locks often used by consent modals.
+    document.documentElement.style.removeProperty("overflow");
+    document.body.style.removeProperty("overflow");
+  });
+}
+
 async function warmPageByScrolling(page: Awaited<ReturnType<BrowserContext["newPage"]>>): Promise<void> {
   const settleMs = Math.max(0, getEnvInt("CAPTURE_SCROLL_SETTLE_MS", 180));
   const maxPasses = Math.max(1, getEnvInt("CAPTURE_SCROLL_MAX_PASSES", 3));
@@ -192,7 +283,9 @@ export async function createCaptureRunner(
         timeout: navTimeout
       });
       await page.waitForTimeout(250);
+      await suppressCookieBanners(page);
       await warmPageByScrolling(page);
+      await suppressCookieBanners(page);
       await page.waitForTimeout(Math.max(0, getEnvInt("CAPTURE_POST_SCROLL_WAIT_MS", 250)));
 
       const routeSlug = toRouteSlug(selection.url);

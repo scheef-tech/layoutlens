@@ -84,6 +84,7 @@ Environment flags:
 - `CAPTURE_SCROLL_SETTLE_MS=180` (pause between scroll steps to allow lazy loads)
 - `CAPTURE_SCROLL_MAX_PASSES=3` (repeat full-page scroll passes for infinite/lazy sections)
 - `CAPTURE_POST_SCROLL_WAIT_MS=250` (final settle wait before screenshot)
+- `CAPTURE_HIDE_COOKIE_BANNERS=true` (attempt dismiss/hide cookie consent overlays before capture)
 
 Note on creating projects/files:
 

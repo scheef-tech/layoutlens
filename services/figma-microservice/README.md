@@ -37,25 +37,26 @@ The dev UI can:
 - set locales + breakpoints
 - create a job and poll status
 
-You can protect `/dev` with Basic Auth by setting:
+`/dev` is a lightweight shell UI. API actions from that UI require a Clerk Bearer token
+(admin role required). The easiest way to use it is embedding `/dev` inside `client-portal`,
+which already posts Clerk tokens to embedded modules.
 
-```bash
-DEV_UI_BASIC_AUTH=admin:change-me
-```
+Artifact reads are secured with a signed job identifier:
 
-If `DEV_UI_BASIC_AUTH` is empty, `/dev` is public.
+- Dev UI surfaces a **signed job id** (`<uuid>.<signature>`).
+- The Figma plugin must use that signed id for `/api/jobs/:jobId` and artifact URLs.
 
 ## API
 
 - `GET /health`
-- `POST /api/sitemap/discover`
-- `POST /api/jobs`
-- `GET /api/figma/projects?teamId=<id>`
-- `GET /api/figma/projects/:projectId/files`
-- `GET /api/jobs`
-- `GET /api/jobs/:jobId`
-- `GET /api/jobs/:jobId/artifacts`
-- `GET /api/jobs/:jobId/artifacts/<relative-file-path>`
+- `POST /api/sitemap/discover` (Clerk admin)
+- `POST /api/jobs` (Clerk admin)
+- `GET /api/figma/projects?teamId=<id>` (Clerk admin)
+- `GET /api/figma/projects/:projectId/files` (Clerk admin)
+- `GET /api/jobs` (Clerk admin)
+- `GET /api/jobs/:jobId` (`:jobId` can be signed job id; unsigned requires Clerk admin)
+- `GET /api/jobs/:jobId/artifacts` (`:jobId` can be signed job id; unsigned requires Clerk admin)
+- `GET /api/jobs/:jobId/artifacts/<relative-file-path>` (same signed access rules)
 
 ## Figma token
 
@@ -70,6 +71,9 @@ Capture jobs are now capture-only; the plugin imports artifacts into canvas.
 Environment flags:
 
 - `FIGMA_TEAM_ID=...` (for dev UI project/file picker default)
+- `CLERK_SECRET_KEY=...` (required for Clerk verification)
+- `CLERK_AUTHORIZED_PARTIES=https://app.scheef.tech,http://localhost:5173` (comma-separated)
+- `JOB_ACCESS_SECRET=...` (optional; defaults to `CLERK_SECRET_KEY`)
 - `JOB_CONCURRENCY=3`
 - `FIGMA_API_TIMEOUT_MS=30000`
 - `PLAYWRIGHT_LAUNCH_TIMEOUT_MS=30000`
@@ -108,7 +112,8 @@ Build and run locally:
 docker build -t layoutlens-figma-microservice .
 docker run --rm -p 8787:8787 \
   -e PORT=8787 \
-  -e DEV_UI_BASIC_AUTH=admin:change-me \
+  -e CLERK_SECRET_KEY=your_clerk_secret \
+  -e CLERK_AUTHORIZED_PARTIES=https://app.scheef.tech,http://localhost:5173 \
   -e PLAYWRIGHT_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox" \
   -e FIGMA_TOKEN=your_token_here \
   layoutlens-figma-microservice
@@ -122,6 +127,7 @@ Optional runtime mode:
 ### Coolify notes
 
 - Set **Port** to `8787` (or set your `PORT` env to whatever Coolify maps).
-- Set `DEV_UI_BASIC_AUTH` in Coolify env vars to protect `/dev`.
+- Set `CLERK_SECRET_KEY` in Coolify env vars.
+- Optionally set `JOB_ACCESS_SECRET` if you want signature separation from Clerk secret.
 - Set `PLAYWRIGHT_CHROMIUM_ARGS=--no-sandbox --disable-setuid-sandbox` if your Coolify runtime requires it.
 - Set `FIGMA_TOKEN` only if you want Figma team/project/file listing in `/dev`.

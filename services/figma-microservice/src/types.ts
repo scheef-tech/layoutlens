@@ -59,6 +59,7 @@ export type JobTaskResult = {
 
 export type ImportJob = {
   id: string;
+  accessToken?: string;
   figmaFileKey: string;
   createdAt: string;
   updatedAt: string;

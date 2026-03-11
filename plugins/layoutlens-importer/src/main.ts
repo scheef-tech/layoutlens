@@ -10,12 +10,9 @@ type JobTask = {
 
 type ImportJob = {
   id: string;
+  accessToken?: string;
   status: string;
   tasks: JobTask[];
-};
-
-type JobsListResponse = {
-  jobs: Array<{ id: string; status: string }>;
 };
 
 type UiSubmit = {
@@ -113,32 +110,26 @@ async function placeImageInto(
   parent.appendChild(rect);
 }
 
-function buildArtifactPath(baseUrl: string, jobId: string, artifactPath: string): string {
+function buildArtifactPath(baseUrl: string, jobReference: string, artifactPath: string): string {
   const cleanBase = normalizeBaseUrl(baseUrl);
   const relativePath = artifactRelativePath(artifactPath);
   const encodedPath = relativePath
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return `${cleanBase}/api/jobs/${encodeURIComponent(jobId)}/artifacts/${encodedPath}`;
+  return `${cleanBase}/api/jobs/${encodeURIComponent(jobReference)}/artifacts/${encodedPath}`;
 }
 
 async function resolveJob(baseUrl: string, requestedJobId: string): Promise<ImportJob> {
   const cleanBase = normalizeBaseUrl(baseUrl);
   const jobId = requestedJobId.trim();
-  if (jobId.length > 0) {
-    return fetchJson<ImportJob>(`${cleanBase}/api/jobs/${encodeURIComponent(jobId)}`);
+  if (jobId.length === 0) {
+    throw new Error("Paste the signed Job ID from the LayoutLens Dev UI.");
   }
-
-  const jobs = await fetchJson<JobsListResponse>(`${cleanBase}/api/jobs`);
-  const latest = jobs.jobs.find((j) => j.status === "success" || j.status === "failed");
-  if (!latest) {
-    throw new Error("No jobs found on server.");
-  }
-  return fetchJson<ImportJob>(`${cleanBase}/api/jobs/${encodeURIComponent(latest.id)}`);
+  return fetchJson<ImportJob>(`${cleanBase}/api/jobs/${encodeURIComponent(jobId)}`);
 }
 
-async function importJobToCanvas(baseUrl: string, job: ImportJob): Promise<number> {
+async function importJobToCanvas(baseUrl: string, job: ImportJob, jobReference: string): Promise<number> {
   let importedCount = 0;
   const MAX_SOURCE_SLICE_HEIGHT = 4096;
 
@@ -204,7 +195,7 @@ async function importJobToCanvas(baseUrl: string, job: ImportJob): Promise<numbe
       section.appendChild(row);
 
       for (const task of tasks) {
-        const artifactUrl = buildArtifactPath(baseUrl, job.id, task.artifactPath!);
+        const artifactUrl = buildArtifactPath(baseUrl, jobReference, task.artifactPath!);
         const meta = await fetchJson<{ width: number; height: number }>(`${artifactUrl}?meta=1`);
         const displayWidth = Math.max(1, Math.round(task.breakpoint));
         const scale = displayWidth / Math.max(1, meta.width);
@@ -277,10 +268,10 @@ function showConfigUi(defaultBaseUrl: string): Promise<{ baseUrl: string; jobId:
 </style>
 <label>Microservice Base URL</label>
 <input id="baseUrl" value="${defaultBaseUrl}" />
-<label>Job ID (optional)</label>
-<input id="jobId" placeholder="Leave empty to use latest job" />
+<label>Signed Job ID</label>
+<input id="jobId" placeholder="Paste signed job id from /dev" />
 <button id="importBtn">Import</button>
-<p>If Job ID is empty, plugin imports the latest finished job from the server.</p>
+<p>Signed job id is required for secure artifact access.</p>
 <script>
   document.getElementById("importBtn").addEventListener("click", () => {
     parent.postMessage({ pluginMessage: {
@@ -311,10 +302,11 @@ export default async function () {
     await figma.clientStorage.setAsync("layoutlensBaseUrl", config.baseUrl);
 
     const job = await resolveJob(config.baseUrl, config.jobId);
-    const imported = await importJobToCanvas(config.baseUrl, job);
+    const jobReference = config.jobId.trim();
+    const imported = await importJobToCanvas(config.baseUrl, job, jobReference);
 
     figma.viewport.scrollAndZoomIntoView(figma.currentPage.children);
-    figma.notify(`Imported ${imported} screenshots from job ${job.id}`);
+    figma.notify(`Imported ${imported} screenshots from job ${jobReference || job.id}`);
     figma.closePlugin();
   } catch (error) {
     const message =

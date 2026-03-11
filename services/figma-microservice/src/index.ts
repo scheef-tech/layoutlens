@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { stat } from "node:fs/promises";
 import { join, normalize, resolve } from "node:path";
@@ -8,6 +9,8 @@ import { FigmaApiClient } from "./figma";
 import { discoverLocalesFromUrls, discoverSitemaps } from "./sitemap";
 import type { CreateJobRequest, DiscoverSitemapRequest } from "./types";
 import { getEnv, getEnvOr } from "./env";
+import { verifyAdminFromAuthorizationHeader } from "./auth";
+import { createJobAccessToken, parseJobReference } from "./job-access";
 
 const app = new Hono();
 const figmaApi = new FigmaApiClient();
@@ -22,7 +25,26 @@ app.get("/health", (c) =>
   })
 );
 
+async function requireAdmin(c: Context) {
+  const auth = await verifyAdminFromAuthorizationHeader(c.req.header("authorization"));
+  if (!auth) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  return null;
+}
+
+function withAccessToken<T extends { id: string }>(job: T): T & { accessToken: string } {
+  return {
+    ...job,
+    accessToken: createJobAccessToken(job.id)
+  };
+}
+
 app.post("/api/sitemap/discover", async (c) => {
+  const unauthorized = await requireAdmin(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
   const payload = await c.req.json<DiscoverSitemapRequest>().catch(() => null);
   if (!payload?.baseUrl) {
     return c.json({ error: "baseUrl is required" }, 400);
@@ -49,6 +71,10 @@ app.post("/api/sitemap/discover", async (c) => {
 });
 
 app.post("/api/jobs", async (c) => {
+  const unauthorized = await requireAdmin(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
   const payload = await c.req.json<CreateJobRequest>().catch(() => null);
   if (!payload) {
     return c.json({ error: "Invalid JSON body" }, 400);
@@ -90,10 +116,14 @@ app.post("/api/jobs", async (c) => {
     targets: cleanTargets,
     breakpoints: cleanBreakpoints
   });
-  return c.json(job, 201);
+  return c.json(withAccessToken(job), 201);
 });
 
 app.get("/api/figma/projects", async (c) => {
+  const unauthorized = await requireAdmin(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
   const teamId = c.req.query("teamId")?.trim() || getEnv("FIGMA_TEAM_ID");
   if (!teamId) {
     return c.json({ error: "teamId is required (or set FIGMA_TEAM_ID)." }, 400);
@@ -107,6 +137,10 @@ app.get("/api/figma/projects", async (c) => {
 });
 
 app.get("/api/figma/projects/:projectId/files", async (c) => {
+  const unauthorized = await requireAdmin(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
   const projectId = c.req.param("projectId");
   if (!projectId) {
     return c.json({ error: "projectId is required." }, 400);
@@ -119,18 +153,50 @@ app.get("/api/figma/projects/:projectId/files", async (c) => {
   }
 });
 
-app.get("/api/jobs", (c) => c.json({ jobs: listJobs() }));
+app.get("/api/jobs", async (c) => {
+  const unauthorized = await requireAdmin(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+  return c.json({
+    jobs: listJobs().map((job) => withAccessToken(job))
+  });
+});
 
-app.get("/api/jobs/:jobId", (c) => {
-  const job = getJob(c.req.param("jobId"));
+app.get("/api/jobs/:jobId", async (c) => {
+  const jobReference = c.req.param("jobId");
+  const parsed = parseJobReference(jobReference);
+  if (!parsed) {
+    return c.json({ error: "Invalid job id signature" }, 401);
+  }
+  if (!parsed.usesSignature) {
+    const unauthorized = await requireAdmin(c);
+    if (unauthorized) {
+      return unauthorized;
+    }
+  }
+
+  const job = getJob(parsed.jobId);
   if (!job) {
     return c.json({ error: "Job not found" }, 404);
   }
-  return c.json(job);
+  return c.json(withAccessToken(job));
 });
 
 app.get("/api/jobs/:jobId/artifacts", async (c) => {
-  const job = getJob(c.req.param("jobId"));
+  const jobReference = c.req.param("jobId");
+  const parsed = parseJobReference(jobReference);
+  if (!parsed) {
+    return c.json({ error: "Invalid job id signature" }, 401);
+  }
+  if (!parsed.usesSignature) {
+    const unauthorized = await requireAdmin(c);
+    if (unauthorized) {
+      return unauthorized;
+    }
+  }
+
+  const job = getJob(parsed.jobId);
   if (!job) {
     return c.json({ error: "Job not found" }, 404);
   }
@@ -142,14 +208,37 @@ app.get("/api/jobs/:jobId/artifacts", async (c) => {
       breakpoint: task.breakpoint,
       path: task.artifactPath
     }));
-  return c.json({ artifacts });
+  return c.json({
+    artifacts,
+    accessToken: createJobAccessToken(job.id)
+  });
 });
 
 app.get("/api/jobs/:jobId/artifacts/*", async (c) => {
-  const jobId = c.req.param("jobId");
-  const relativePath = c.req.path.replace(`/api/jobs/${jobId}/artifacts/`, "");
+  const jobReference = c.req.param("jobId");
+  const parsed = parseJobReference(jobReference);
+  if (!parsed) {
+    return c.json({ error: "Invalid job id signature" }, 401);
+  }
+  if (!parsed.usesSignature) {
+    const unauthorized = await requireAdmin(c);
+    if (unauthorized) {
+      return unauthorized;
+    }
+  }
+
+  const job = getJob(parsed.jobId);
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+
+  const relativePath = c.req.path.replace(`/api/jobs/${jobReference}/artifacts/`, "");
+  const normalizedRelativePath = normalize(relativePath);
+  if (!normalizedRelativePath.startsWith(`${parsed.jobId}/`)) {
+    return c.json({ error: "Artifact path does not belong to job" }, 403);
+  }
   const runsRoot = resolve(getEnvOr("RUNS_DIR", "runs"));
-  const targetPath = resolve(join(runsRoot, normalize(relativePath)));
+  const targetPath = resolve(join(runsRoot, normalizedRelativePath));
   if (!targetPath.startsWith(runsRoot)) {
     return c.json({ error: "Invalid artifact path" }, 400);
   }
@@ -209,17 +298,7 @@ app.get("/api/jobs/:jobId/artifacts/*", async (c) => {
   });
 });
 
-app.get("/dev", (c) => {
-  if (!isAuthorizedForDevUi(c.req.header("authorization"))) {
-    return new Response("Unauthorized", {
-      status: 401,
-      headers: {
-        "WWW-Authenticate": 'Basic realm="LayoutLens Dev UI"'
-      }
-    });
-  }
-  return c.html(renderDevUi());
-});
+app.get("/dev", (c) => c.html(renderDevUi()));
 
 const port = Number(getEnvOr("PORT", "8787"));
 console.log(`layoutlens-figma-microservice listening on http://localhost:${port}`);
@@ -228,26 +307,6 @@ export default {
   port,
   fetch: app.fetch
 };
-
-function isAuthorizedForDevUi(authorizationHeader: string | undefined): boolean {
-  const expected = getEnv("DEV_UI_BASIC_AUTH");
-  if (!expected) {
-    return true;
-  }
-
-  if (!authorizationHeader?.startsWith("Basic ")) {
-    return false;
-  }
-
-  const encoded = authorizationHeader.slice("Basic ".length).trim();
-  let decoded: string;
-  try {
-    decoded = atob(encoded);
-  } catch {
-    return false;
-  }
-  return decoded === expected;
-}
 
 function renderDevUi(): string {
   return `<!doctype html>
@@ -366,6 +425,20 @@ function renderDevUi(): string {
         font-size: 12px;
         line-height: 1.35;
       }
+      .auth-state {
+        margin: 0 0 12px 0;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #121925;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .auth-state.unlocked {
+        border-color: #2d5a34;
+        background: #0f1c12;
+        color: #9fd3a7;
+      }
       .readonly-grid {
         margin-top: 8px;
         display: grid;
@@ -464,6 +537,7 @@ function renderDevUi(): string {
   </head>
   <body>
     <h1>LayoutLens Microservice Dev UI</h1>
+    <div id="authState" class="auth-state">Locked: waiting for Clerk token from embedded client-portal.</div>
     <div class="grid">
       <section class="card">
         <h2>Sitemap Discovery</h2>
@@ -543,14 +617,14 @@ function renderDevUi(): string {
         </div>
         <div id="postJobActions" class="post-job hidden">
           <h3>Job complete: next steps</h3>
-          <div class="row-line"><span>Job ID</span><span id="postJobId" class="mono">-</span></div>
+          <div class="row-line"><span>Signed Job ID</span><span id="postJobId" class="mono">-</span></div>
           <div class="inline-actions">
-            <button id="copyJobIdBtn" type="button" class="btn-secondary">Copy job id</button>
+            <button id="copyJobIdBtn" type="button" class="btn-secondary">Copy signed job id</button>
           </div>
           <ol>
             <li>Run the <span class="mono">Plugins/layoutlens Importer</span> plugin in your target Figma file.</li>
             <li>Set plugin base URL to <span id="postJobBaseUrl" class="mono">-</span>.</li>
-            <li>Paste job id in plugin UI: <span id="postJobIdInline" class="mono">-</span>.</li>
+            <li>Paste signed job id in plugin UI: <span id="postJobIdInline" class="mono">-</span>.</li>
           </ol>
         </div>
         <label>Last response</label>
@@ -587,12 +661,72 @@ function renderDevUi(): string {
       const figmaFileSelectEl = document.getElementById("figmaFileSelect");
       const artifactLocaleFilterEl = document.getElementById("artifactLocaleFilter");
       const artifactBreakpointFilterEl = document.getElementById("artifactBreakpointFilter");
+      const authStateEl = document.getElementById("authState");
       let allArtifacts = [];
       let activeJobId = "";
       let activePollToken = 0;
+      let embedAuthToken = "";
+      let uiUnlocked = false;
       let discoveredLocales = [];
       let discoveredRouteGroups = [];
       const selectedRouteIds = new Set();
+
+      function apiFetch(input, init) {
+        const headers = new Headers(init?.headers);
+        if (embedAuthToken) {
+          headers.set("Authorization", "Bearer " + embedAuthToken);
+        }
+        return fetch(input, {
+          ...init,
+          headers
+        }).then((response) => {
+          if (response.status === 401) {
+            setOutput({
+              error:
+                "Unauthorized. Open /dev inside client-portal so Clerk token handshake can authorize requests."
+            });
+          }
+          return response;
+        });
+      }
+
+      function setUiLocked(locked) {
+        const controls = document.querySelectorAll("input, select, textarea, button");
+        for (const control of controls) {
+          control.disabled = locked;
+        }
+        if (locked) {
+          authStateEl.textContent =
+            "Locked: waiting for Clerk token from embedded client-portal.";
+          authStateEl.classList.remove("unlocked");
+          return;
+        }
+        authStateEl.textContent = "Authorized: Clerk token received.";
+        authStateEl.classList.add("unlocked");
+      }
+
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: "READY" }, "*");
+      } else {
+        setUiLocked(true);
+        setOutput({
+          error:
+            "This UI is locked when opened directly. Open it inside client-portal (/layoutlens) to authorize."
+        });
+      }
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (data.type !== "AUTH") {
+          return;
+        }
+        embedAuthToken = typeof data.token === "string" ? data.token : "";
+        const shouldUnlock = embedAuthToken.length > 0;
+        if (shouldUnlock !== uiUnlocked) {
+          uiUnlocked = shouldUnlock;
+          setUiLocked(!uiUnlocked);
+        }
+      });
+      setUiLocked(true);
 
       function setOutput(value) {
         outputEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -785,7 +919,7 @@ function renderDevUi(): string {
 
       async function loadArtifacts(jobId) {
         activeJobId = jobId;
-        const res = await fetch("/api/jobs/" + jobId + "/artifacts");
+        const res = await apiFetch("/api/jobs/" + jobId + "/artifacts");
         const json = await res.json();
         if (!res.ok) {
           allArtifacts = [];
@@ -806,15 +940,19 @@ function renderDevUi(): string {
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 2500));
-          const statusRes = await fetch("/api/jobs/" + jobId, { cache: "no-store" });
+          const statusRes = await apiFetch("/api/jobs/" + jobId, { cache: "no-store" });
           const status = await statusRes.json();
           setJobMonitorState(status);
           if (attempt % 4 === 0 || status.status === "success" || status.status === "failed") {
             setOutput(status);
           }
           if (status.status === "success" || status.status === "failed") {
-            await loadArtifacts(jobId);
-            showPostJobActions(jobId);
+            const jobAccessToken =
+              typeof status.accessToken === "string" && status.accessToken.length > 0
+                ? status.accessToken
+                : jobId;
+            await loadArtifacts(jobAccessToken);
+            showPostJobActions(jobAccessToken);
             return;
           }
         }
@@ -855,7 +993,7 @@ function renderDevUi(): string {
         }
         setOutput("Loading Figma projects...");
         resetProjectSelect();
-        const res = await fetch("/api/figma/projects?teamId=" + encodeURIComponent(teamId));
+        const res = await apiFetch("/api/figma/projects?teamId=" + encodeURIComponent(teamId));
         const json = await res.json();
         setOutput(json);
         if (!res.ok) {
@@ -875,7 +1013,7 @@ function renderDevUi(): string {
           return;
         }
         setOutput("Loading files...");
-        const res = await fetch("/api/figma/projects/" + encodeURIComponent(projectId) + "/files");
+        const res = await apiFetch("/api/figma/projects/" + encodeURIComponent(projectId) + "/files");
         const json = await res.json();
         setOutput(json);
         if (!res.ok) {
@@ -928,7 +1066,7 @@ function renderDevUi(): string {
           maxUrls: Number(document.getElementById("maxUrls").value || 200),
           maxSitemaps: Number(document.getElementById("maxSitemaps").value || 10)
         };
-        const res = await fetch("/api/sitemap/discover", {
+        const res = await apiFetch("/api/sitemap/discover", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body)
@@ -993,7 +1131,7 @@ function renderDevUi(): string {
         allArtifacts = [];
         activeJobId = "";
         resetArtifactFilters();
-        const res = await fetch("/api/jobs", {
+        const res = await apiFetch("/api/jobs", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload)
@@ -1019,9 +1157,9 @@ function renderDevUi(): string {
         }
         try {
           await navigator.clipboard.writeText(value);
-          setOutput("Copied job id to clipboard.");
+          setOutput("Copied signed job id to clipboard.");
         } catch {
-          setOutput({ error: "Clipboard write failed. Copy job id manually." });
+          setOutput({ error: "Clipboard write failed. Copy signed job id manually." });
         }
       });
       pageLocaleFilterEl.addEventListener("change", renderPagesList);
@@ -1044,7 +1182,7 @@ function renderDevUi(): string {
 function getDevUiConfig(): { figmaWriteState: string; importFlow: string } {
   return {
     figmaWriteState: "Disabled (capture-only jobs)",
-    importFlow: "Plugin pulls artifacts via /api/jobs/:jobId/artifacts/*"
+    importFlow: "Plugin pulls artifacts via /api/jobs/:signedJobId/artifacts/*"
   };
 }
 

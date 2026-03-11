@@ -255,7 +255,7 @@ function renderDevUi(): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LayoutLens Figma Microservice</title>
+    <title>LayoutLens Microservice</title>
     <style>
       :root {
         color-scheme: dark;
@@ -432,6 +432,9 @@ function renderDevUi(): string {
       .post-job.hidden {
         display: none;
       }
+      .figma-options {
+        display: none;
+      }
       .post-job h3 {
         margin: 0 0 8px 0;
         font-size: 14px;
@@ -460,7 +463,7 @@ function renderDevUi(): string {
     </style>
   </head>
   <body>
-    <h1>LayoutLens → Figma (Microservice Dev UI)</h1>
+    <h1>LayoutLens Microservice Dev UI</h1>
     <div class="grid">
       <section class="card">
         <h2>Sitemap Discovery</h2>
@@ -495,36 +498,39 @@ function renderDevUi(): string {
 
       <section class="card">
         <h2>Job Creation</h2>
-        <label>Figma team id</label>
-        <input id="figmaTeamId" value="${escapeHtml(getEnv("FIGMA_TEAM_ID") || "")}" placeholder="123456789..." />
-        <button id="loadProjectsBtn" class="btn-secondary">Load projects</button>
-        <div class="inline-actions">
-          <button id="openTeamInFigmaBtn" type="button" class="btn-secondary">Create project in Figma</button>
-          <button id="reloadProjectsBtn" type="button" class="btn-secondary">Reload projects</button>
-        </div>
-        <label>Project (folder)</label>
-        <select id="figmaProjectSelect">
-          <option value="">Select project</option>
-        </select>
-        <div class="inline-actions">
-          <button id="openProjectInFigmaBtn" type="button" class="btn-secondary">Create file in Figma</button>
-          <button id="reloadFilesBtn" type="button" class="btn-secondary">Reload files</button>
-        </div>
-        <label>File</label>
-        <select id="figmaFileSelect">
-          <option value="">Select file</option>
-        </select>
-        <div class="readonly-grid">
-          <div class="readonly-item">
-            <div class="k">Figma write integration</div>
-            <div class="v">${escapeHtml(getDevUiConfig().figmaWriteState)}</div>
+        <details class="figma-options">
+          <summary>Figma options (hidden for now)</summary>
+          <label>Figma team id</label>
+          <input id="figmaTeamId" value="${escapeHtml(getEnv("FIGMA_TEAM_ID") || "")}" placeholder="123456789..." />
+          <button id="loadProjectsBtn" class="btn-secondary">Load projects</button>
+          <div class="inline-actions">
+            <button id="openTeamInFigmaBtn" type="button" class="btn-secondary">Create project in Figma</button>
+            <button id="reloadProjectsBtn" type="button" class="btn-secondary">Reload projects</button>
           </div>
-          <div class="readonly-item">
-            <div class="k">Import path</div>
-            <div class="v">${escapeHtml(getDevUiConfig().importFlow)}</div>
+          <label>Project (folder)</label>
+          <select id="figmaProjectSelect">
+            <option value="">Select project</option>
+          </select>
+          <div class="inline-actions">
+            <button id="openProjectInFigmaBtn" type="button" class="btn-secondary">Create file in Figma</button>
+            <button id="reloadFilesBtn" type="button" class="btn-secondary">Reload files</button>
           </div>
-        </div>
-        <div class="help">Create project/file via the Figma web page buttons above, then reload here and continue.</div>
+          <label>File</label>
+          <select id="figmaFileSelect">
+            <option value="">Select file</option>
+          </select>
+          <div class="readonly-grid">
+            <div class="readonly-item">
+              <div class="k">Figma write integration</div>
+              <div class="v">${escapeHtml(getDevUiConfig().figmaWriteState)}</div>
+            </div>
+            <div class="readonly-item">
+              <div class="k">Import path</div>
+              <div class="v">${escapeHtml(getDevUiConfig().importFlow)}</div>
+            </div>
+          </div>
+          <div class="help">Create project/file via the Figma web page buttons above, then reload here and continue.</div>
+        </details>
         <label>Breakpoints (comma-separated)</label>
         <input id="breakpoints" value="375,768,1440" />
         <button id="createJobBtn">Create import job</button>
@@ -540,10 +546,9 @@ function renderDevUi(): string {
           <div class="row-line"><span>Job ID</span><span id="postJobId" class="mono">-</span></div>
           <div class="inline-actions">
             <button id="copyJobIdBtn" type="button" class="btn-secondary">Copy job id</button>
-            <button id="openFileInFigmaBtn" type="button" class="btn-secondary">Open file in Figma</button>
           </div>
           <ol>
-            <li>Run the <span class="mono">Plugins/layoutlens Importer</span> plugin in this Figma file.</li>
+            <li>Run the <span class="mono">Plugins/layoutlens Importer</span> plugin in your target Figma file.</li>
             <li>Set plugin base URL to <span id="postJobBaseUrl" class="mono">-</span>.</li>
             <li>Paste job id in plugin UI: <span id="postJobIdInline" class="mono">-</span>.</li>
           </ol>
@@ -1007,7 +1012,6 @@ function renderDevUi(): string {
       document.getElementById("reloadProjectsBtn").addEventListener("click", loadProjects);
       document.getElementById("openTeamInFigmaBtn").addEventListener("click", openTeamInFigma);
       document.getElementById("openProjectInFigmaBtn").addEventListener("click", openProjectInFigma);
-      document.getElementById("openFileInFigmaBtn").addEventListener("click", openSelectedFileInFigma);
       document.getElementById("copyJobIdBtn").addEventListener("click", async () => {
         const value = postJobIdEl.textContent || "";
         if (!value || value === "-") {
@@ -1030,9 +1034,6 @@ function renderDevUi(): string {
         loadFilesForProject(event.target.value);
       });
 
-      if (figmaTeamIdEl.value.trim()) {
-        loadProjects();
-      }
       setJobMonitorState(null);
       hidePostJobActions();
     </script>

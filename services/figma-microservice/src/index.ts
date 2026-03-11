@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { stat } from "node:fs/promises";
 import { join, normalize, resolve } from "node:path";
 import sharp from "sharp";
-import { createJob, getJob, listJobs } from "./job-store";
+import { createJob, getJob, listJobs, startJobCleanup } from "./job-store";
 import { FigmaApiClient } from "./figma";
 import { discoverLocalesFromUrls, discoverSitemaps } from "./sitemap";
 import type { CreateJobRequest, DiscoverSitemapRequest } from "./types";
@@ -14,6 +14,7 @@ import { createJobAccessToken, parseJobReference } from "./job-access";
 
 const app = new Hono();
 const figmaApi = new FigmaApiClient();
+startJobCleanup();
 
 app.use("*", cors());
 
@@ -435,9 +436,7 @@ function renderDevUi(): string {
         font-size: 12px;
       }
       .auth-state.unlocked {
-        border-color: #2d5a34;
-        background: #0f1c12;
-        color: #9fd3a7;
+        display: none;
       }
       .readonly-grid {
         margin-top: 8px;
@@ -701,7 +700,6 @@ function renderDevUi(): string {
           authStateEl.classList.remove("unlocked");
           return;
         }
-        authStateEl.textContent = "Authorized: Clerk token received.";
         authStateEl.classList.add("unlocked");
       }
 

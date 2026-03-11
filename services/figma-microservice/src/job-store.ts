@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { CreateJobRequest, ImportJob } from "./types";
 import { toPageSelections } from "./selection";
 import { createCaptureRunner } from "./capture";
@@ -9,6 +9,7 @@ import { logEvent } from "./logger";
 
 const jobs = new Map<string, ImportJob>();
 const jobInputs = new Map<string, CreateJobRequest>();
+let cleanupStarted = false;
 
 export function listJobs(): ImportJob[] {
   return [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -48,6 +49,32 @@ export function createJob(payload: CreateJobRequest): ImportJob {
   jobInputs.set(job.id, payload);
   void runJob(job.id);
   return job;
+}
+
+export function startJobCleanup(): void {
+  if (cleanupStarted) {
+    return;
+  }
+  cleanupStarted = true;
+
+  const intervalMinutes = Math.max(1, getEnvInt("CLEANUP_INTERVAL_MINUTES", 15));
+  const intervalMs = intervalMinutes * 60 * 1000;
+
+  const runCleanup = async () => {
+    try {
+      await cleanupExpiredJobs();
+      await cleanupOrphanRunDirectories();
+    } catch (error) {
+      logEvent("ERROR", "job.cleanup.failed", {
+        error: error instanceof Error ? error.message : "Unknown cleanup error"
+      });
+    }
+  };
+
+  void runCleanup();
+  setInterval(() => {
+    void runCleanup();
+  }, intervalMs);
 }
 
 async function runJob(jobId: string): Promise<void> {
@@ -179,4 +206,62 @@ async function writeManifest(job: ImportJob): Promise<void> {
   const manifestPath = join(runsDir, job.id, "manifest.json");
   await mkdir(join(runsDir, job.id), { recursive: true });
   await Bun.write(manifestPath, JSON.stringify(job, null, 2));
+}
+
+function getJobTtlMs(): number {
+  const ttlHours = Math.max(1, getEnvInt("JOB_TTL_HOURS", 24));
+  return ttlHours * 60 * 60 * 1000;
+}
+
+async function cleanupExpiredJobs(): Promise<void> {
+  const now = Date.now();
+  const cutoff = now - getJobTtlMs();
+
+  for (const [jobId, job] of jobs.entries()) {
+    const createdAtMs = Date.parse(job.createdAt);
+    if (!Number.isFinite(createdAtMs) || createdAtMs >= cutoff) {
+      continue;
+    }
+
+    jobs.delete(jobId);
+    jobInputs.delete(jobId);
+    await rm(job.runDir, { recursive: true, force: true });
+    logEvent("INFO", "job.cleanup.expired", {
+      jobId,
+      createdAt: job.createdAt
+    });
+  }
+}
+
+async function cleanupOrphanRunDirectories(): Promise<void> {
+  const runsDir = resolve(getEnvOr("RUNS_DIR", "runs"));
+  const cutoff = Date.now() - getJobTtlMs();
+
+  let entries;
+  try {
+    entries = await readdir(runsDir, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const dirPath = join(runsDir, entry.name);
+    let info;
+    try {
+      info = await stat(dirPath);
+    } catch {
+      continue;
+    }
+    if (info.mtimeMs >= cutoff) {
+      continue;
+    }
+    await rm(dirPath, { recursive: true, force: true });
+    logEvent("INFO", "job.cleanup.orphanDir", {
+      runDir: dirPath,
+      mtime: new Date(info.mtimeMs).toISOString()
+    });
+  }
 }

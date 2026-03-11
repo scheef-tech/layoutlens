@@ -75,6 +75,8 @@ Environment flags:
 - `CLERK_AUTHORIZED_PARTIES=https://app.scheef.tech,http://localhost:5173` (comma-separated)
 - `JOB_ACCESS_SECRET=...` (optional; defaults to `CLERK_SECRET_KEY`)
 - `JOB_CONCURRENCY=3`
+- `JOB_TTL_HOURS=24` (auto-delete job metadata and artifacts older than TTL)
+- `CLEANUP_INTERVAL_MINUTES=15` (cleanup sweep cadence)
 - `FIGMA_API_TIMEOUT_MS=30000`
 - `PLAYWRIGHT_LAUNCH_TIMEOUT_MS=30000`
 - `CAPTURE_NAV_TIMEOUT_MS=90000`

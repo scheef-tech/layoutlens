@@ -1,22 +1,99 @@
-type Shot = { locale: string; breakpoint: number; path: string };
-type RunManifest = {
-  id: string;
-  url: string;
-  breakpoints: number[];
-  locales: string[];
-  out_dir: string;
-  shots: Shot[];
-  _servedBy?: string;
+type JobTask = {
+  page: string;
+  routeKey?: string;
+  locale: string;
+  breakpoint: number;
+  status: "success" | "skipped" | "failed";
+  message: string;
+  artifactPath?: string;
 };
+
+type ImportJob = {
+  id: string;
+  status: string;
+  tasks: JobTask[];
+};
+
+type JobsListResponse = {
+  jobs: Array<{ id: string; status: string }>;
+};
+
+type UiSubmit = {
+  type: "submit";
+  baseUrl: string;
+  jobId: string;
+};
+
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function parseRouteLabel(pageUrl: string): string {
+  try {
+    const parsed = new URL(pageUrl);
+    return parsed.pathname === "/" ? "home" : parsed.pathname.replace(/^\/+/, "");
+  } catch {
+    return pageUrl;
+  }
+}
+
+function toCanonicalRouteId(task: JobTask): string {
+  const routeKey = task.routeKey?.trim().toLowerCase();
+  if (routeKey) {
+    return routeKey;
+  }
+  try {
+    const parsed = new URL(task.page);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const first = segments[0]?.toLowerCase();
+    const locale = task.locale.toLowerCase();
+    const withoutLocale = first === locale ? segments.slice(1) : segments;
+    if (withoutLocale.length === 0) {
+      return "home";
+    }
+    return withoutLocale.join("/").toLowerCase();
+  } catch {
+    return parseRouteLabel(task.page).toLowerCase();
+  }
+}
+
+function routePageName(routeId: string): string {
+  if (routeId === "home") {
+    return "home";
+  }
+  return routeId;
+}
+
+function getOrCreatePage(name: string): PageNode {
+  const existing = figma.root.children.find((node) => node.type === "PAGE" && node.name === name);
+  if (existing && existing.type === "PAGE") {
+    existing.name = name;
+    return existing;
+  }
+  const created = figma.createPage();
+  created.name = name;
+  return created;
+}
+
+function artifactRelativePath(artifactPath: string): string {
+  return artifactPath.startsWith("runs/") ? artifactPath.slice(5) : artifactPath;
+}
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
-  return res.json() as Promise<T>;
+  if (!res.ok) {
+    throw new Error(`Request failed (${res.status}) for ${url}`);
+  }
+  return (await res.json()) as T;
 }
 
-async function loadFromServer(baseUrl: string): Promise<RunManifest> {
-  return fetchJson<RunManifest>(`${baseUrl.replace(/\/$/, "")}/manifest`);
+async function fetchBytes(url: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Image fetch failed (${res.status}) for ${url}`);
+  }
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
 }
 
 async function placeImageInto(
@@ -36,136 +113,217 @@ async function placeImageInto(
   parent.appendChild(rect);
 }
 
-async function fetchBytes(url: string): Promise<Uint8Array> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch ${url}`);
-  const buf = await res.arrayBuffer();
-  return new Uint8Array(buf);
+function buildArtifactPath(baseUrl: string, jobId: string, artifactPath: string): string {
+  const cleanBase = normalizeBaseUrl(baseUrl);
+  const relativePath = artifactRelativePath(artifactPath);
+  const encodedPath = relativePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${cleanBase}/api/jobs/${encodeURIComponent(jobId)}/artifacts/${encodedPath}`;
 }
 
-export default async function () {
-  try {
-    const stored = (await figma.clientStorage.getAsync("layoutlensBaseUrl")) as
-      | string
-      | undefined;
-    const server =
-      stored && stored.length > 0 ? stored : "http://localhost:7777";
-    const manifest = await loadFromServer(server);
+async function resolveJob(baseUrl: string, requestedJobId: string): Promise<ImportJob> {
+  const cleanBase = normalizeBaseUrl(baseUrl);
+  const jobId = requestedJobId.trim();
+  if (jobId.length > 0) {
+    return fetchJson<ImportJob>(`${cleanBase}/api/jobs/${encodeURIComponent(jobId)}`);
+  }
 
-    // Group by locale into columns; preserve breakpoint order within each
-    const localeToShots = new Map<string, Shot[]>();
-    for (const s of manifest.shots) {
-      if (!localeToShots.has(s.locale)) localeToShots.set(s.locale, []);
-      localeToShots.get(s.locale)!.push(s);
+  const jobs = await fetchJson<JobsListResponse>(`${cleanBase}/api/jobs`);
+  const latest = jobs.jobs.find((j) => j.status === "success" || j.status === "failed");
+  if (!latest) {
+    throw new Error("No jobs found on server.");
+  }
+  return fetchJson<ImportJob>(`${cleanBase}/api/jobs/${encodeURIComponent(latest.id)}`);
+}
+
+async function importJobToCanvas(baseUrl: string, job: ImportJob): Promise<number> {
+  let importedCount = 0;
+  const MAX_SOURCE_SLICE_HEIGHT = 4096;
+
+  // Group screenshots by canonical route, then by locale.
+  const routeGroups = new Map<string, Map<string, JobTask[]>>();
+  for (const task of job.tasks) {
+    if (!task.artifactPath) {
+      continue;
     }
-    const locales = Array.from(localeToShots.keys()).sort();
+    const routeId = toCanonicalRouteId(task);
+    if (!routeGroups.has(routeId)) {
+      routeGroups.set(routeId, new Map());
+    }
+    const byLocale = routeGroups.get(routeId)!;
+    if (!byLocale.has(task.locale)) {
+      byLocale.set(task.locale, []);
+    }
+    byLocale.get(task.locale)!.push(task);
+  }
 
-    const COL_GAP = 48;
-    const ROW_GAP = 96;
-    const displayWidth = 800;
+  const sortedRouteIds = Array.from(routeGroups.keys()).sort((a, b) => a.localeCompare(b));
+  let firstTargetPage: PageNode | undefined;
+  const SECTION_GAP_X = 120;
+  const SECTION_GAP_Y = 80;
+  const FRAME_GAP = 48;
 
-    let x = 0;
-    let y = 0;
-    let rowMaxHeight = 0;
-    let lastBreakpoint: number | null = null;
+  for (const routeId of sortedRouteIds) {
+    const pageName = routePageName(routeId);
+    const page = getOrCreatePage(pageName);
+    if (!firstTargetPage) {
+      firstTargetPage = page;
+    }
+    let sectionX = 0;
+    let sectionY = 0;
 
-    const page = figma.currentPage;
+    const localeEntries: Array<[string, JobTask[]]> = Array.from(routeGroups.get(routeId)!.entries()).sort(
+      ([a], [b]) => a.localeCompare(b)
+    );
+    for (const [locale, tasks] of localeEntries) {
+      tasks.sort((a: JobTask, b: JobTask) => a.breakpoint - b.breakpoint);
 
-    for (const locale of locales) {
-      // Start a new column
-      let colY = 0;
-      const colX = x;
-      const shots = localeToShots
-        .get(locale)!
-        .sort((a, b) => a.breakpoint - b.breakpoint);
-      // Column header frame
-      const header = figma.createFrame();
-      header.name = `${locale}`;
-      header.x = colX;
-      header.y = y;
-      header.resize(displayWidth, 1);
-      page.appendChild(header);
-      colY += 8;
-      let columnHeight = 0;
-      for (const shot of shots) {
-        lastBreakpoint = shot.breakpoint;
+      const section = figma.createFrame();
+      section.name = `${pageName} · ${locale}`;
+      section.layoutMode = "VERTICAL";
+      section.counterAxisSizingMode = "AUTO";
+      section.primaryAxisSizingMode = "AUTO";
+      section.itemSpacing = 24;
+      section.paddingTop = 24;
+      section.paddingRight = 24;
+      section.paddingBottom = 24;
+      section.paddingLeft = 24;
+      section.x = sectionX;
+      section.y = sectionY;
+      section.fills = [];
 
-        // Get meta once
-        const absPart = decodeURIComponent(shot.path.split("abs=")[1] || "");
-        const meta = await fetchJson<{ width: number; height: number }>(
-          `${server.replace(/\/$/, "")}/meta?abs=${encodeURIComponent(absPart)}`
-        );
+      const row = figma.createFrame();
+      row.name = "breakpoints";
+      row.layoutMode = "HORIZONTAL";
+      row.counterAxisSizingMode = "AUTO";
+      row.primaryAxisSizingMode = "AUTO";
+      row.itemSpacing = FRAME_GAP;
+      row.fills = [];
+      section.appendChild(row);
 
+      for (const task of tasks) {
+        const artifactUrl = buildArtifactPath(baseUrl, job.id, task.artifactPath!);
+        const meta = await fetchJson<{ width: number; height: number }>(`${artifactUrl}?meta=1`);
+        const displayWidth = Math.max(1, Math.round(task.breakpoint));
         const scale = displayWidth / Math.max(1, meta.width);
 
-        // Container frame for this shot in the column
-        const shotFrame = figma.createFrame();
-        shotFrame.name = `${shot.locale} · ${shot.breakpoint}`;
-        shotFrame.x = colX;
-        shotFrame.y = y + colY;
-        shotFrame.resize(displayWidth, 10);
+        const frame = figma.createFrame();
+        frame.name = `${task.breakpoint}`;
+        frame.layoutMode = "VERTICAL";
+        frame.counterAxisSizingMode = "AUTO";
+        frame.primaryAxisSizingMode = "AUTO";
+        frame.itemSpacing = 8;
+        frame.fills = [];
 
-        const MAX = 4096;
         let currentY = 0;
-        if (meta.height > MAX) {
-          let top = 0;
-          while (top < meta.height) {
-            const sliceH = Math.min(MAX, meta.height - top);
+        if (meta.height > MAX_SOURCE_SLICE_HEIGHT) {
+          let sliceTop = 0;
+          while (sliceTop < meta.height) {
+            const sliceHeight = Math.min(MAX_SOURCE_SLICE_HEIGHT, meta.height - sliceTop);
             const bytes = await fetchBytes(
-              `${server.replace(/\/$/, "")}${
-                shot.path
-              }&sliceTop=${top}&sliceHeight=${sliceH}`
+              `${artifactUrl}?sliceTop=${sliceTop}&sliceHeight=${sliceHeight}`
             );
-            const displayHeight = Math.max(1, Math.round(sliceH * scale));
+            const displayHeight = Math.max(1, Math.round(sliceHeight * scale));
             await placeImageInto(
-              shotFrame,
+              frame,
               bytes,
-              `${shot.locale} · ${shot.breakpoint} · y=${top}`,
+              `${locale} · ${task.breakpoint} · y=${sliceTop}`,
               currentY,
               displayWidth,
               displayHeight
             );
             currentY += displayHeight + 16;
-            top += sliceH;
+            sliceTop += sliceHeight;
           }
         } else {
-          const bytes = await fetchBytes(
-            `${server.replace(/\/$/, "")}${shot.path}`
-          );
+          const bytes = await fetchBytes(artifactUrl);
           const displayHeight = Math.max(1, Math.round(meta.height * scale));
-          await placeImageInto(
-            shotFrame,
-            bytes,
-            `${shot.locale} · ${shot.breakpoint}`,
-            currentY,
-            displayWidth,
-            displayHeight
-          );
+          await placeImageInto(frame, bytes, `${locale} · ${task.breakpoint}`, currentY, displayWidth, displayHeight);
           currentY += displayHeight;
         }
 
-        // Resize shot container to fit
-        shotFrame.resize(displayWidth, currentY);
-        page.appendChild(shotFrame);
-        colY += shotFrame.height + ROW_GAP / 2;
-        columnHeight = colY;
+        row.appendChild(frame);
+        importedCount += 1;
       }
-      // Advance to next column, track tallest column height
-      x += displayWidth + COL_GAP;
-      rowMaxHeight = Math.max(rowMaxHeight, columnHeight);
-    }
 
-    figma.viewport.scrollAndZoomIntoView(page.children);
-    figma.notify("Imported LayoutLens run into Figma");
+      page.appendChild(section);
+      sectionX += section.width + SECTION_GAP_X;
+      if (sectionX > 6000) {
+        sectionX = 0;
+        sectionY += section.height + SECTION_GAP_Y;
+      }
+    }
+  }
+
+  if (firstTargetPage) {
+    figma.currentPage = firstTargetPage;
+  }
+
+  return importedCount;
+}
+
+function showConfigUi(defaultBaseUrl: string): Promise<{ baseUrl: string; jobId: string }> {
+  return new Promise((resolve) => {
+    figma.showUI(
+      `
+<style>
+  body { font-family: Inter, system-ui, sans-serif; margin: 16px; }
+  label { display: block; font-size: 12px; margin-bottom: 4px; color: #444; }
+  input { width: 100%; margin-bottom: 12px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+  button { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: #2f7cff; color: white; font-weight: 600; cursor: pointer; }
+  p { font-size: 12px; color: #666; }
+</style>
+<label>Microservice Base URL</label>
+<input id="baseUrl" value="${defaultBaseUrl}" />
+<label>Job ID (optional)</label>
+<input id="jobId" placeholder="Leave empty to use latest job" />
+<button id="importBtn">Import</button>
+<p>If Job ID is empty, plugin imports the latest finished job from the server.</p>
+<script>
+  document.getElementById("importBtn").addEventListener("click", () => {
+    parent.postMessage({ pluginMessage: {
+      type: "submit",
+      baseUrl: document.getElementById("baseUrl").value,
+      jobId: document.getElementById("jobId").value
+    }}, "*");
+  });
+</script>
+      `,
+      { width: 380, height: 240 }
+    );
+
+    figma.ui.onmessage = (message: UiSubmit) => {
+      if (message.type === "submit") {
+        resolve({ baseUrl: message.baseUrl.trim(), jobId: message.jobId.trim() });
+      }
+    };
+  });
+}
+
+export default async function () {
+  try {
+    const stored = (await figma.clientStorage.getAsync("layoutlensBaseUrl")) as string | undefined;
+    const defaultBaseUrl = stored && stored.length > 0 ? stored : "http://localhost:8787";
+
+    const config = await showConfigUi(defaultBaseUrl);
+    await figma.clientStorage.setAsync("layoutlensBaseUrl", config.baseUrl);
+
+    const job = await resolveJob(config.baseUrl, config.jobId);
+    const imported = await importJobToCanvas(config.baseUrl, job);
+
+    figma.viewport.scrollAndZoomIntoView(figma.currentPage.children);
+    figma.notify(`Imported ${imported} screenshots from job ${job.id}`);
     figma.closePlugin();
-  } catch (e) {
-    const msg =
-      e instanceof Error
-        ? e.message
-        : typeof e === "string"
-        ? e
-        : JSON.stringify(e);
-    figma.notify(msg, { timeout: 5000 });
-    figma.closePlugin(msg);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : JSON.stringify(error);
+    figma.notify(message, { timeout: 6000 });
+    figma.closePlugin(message);
   }
 }

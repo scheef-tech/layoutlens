@@ -17,14 +17,22 @@ export type DiscoverSitemapResponse = {
   sourceSitemaps: string[];
   pageUrls: string[];
   discoveredLocales: string[];
+  routeGroups: Array<{
+    id: string;
+    displayPath: string;
+    locales: Record<string, string>;
+  }>;
 };
 
 export type CreateJobRequest = {
-  figmaFileKey: string;
-  figmaNodeId?: string;
-  artifactPublicBaseUrl?: string;
+  figmaFileKey?: string;
   pages: string[];
   locales: string[];
+  targets?: Array<{
+    url: string;
+    locale: string;
+    routeKey?: string;
+  }>;
   breakpoints: Breakpoint[];
   localeCookie?: {
     name: string;
@@ -41,6 +49,7 @@ export type JobStatus = "queued" | "running" | "success" | "failed";
 
 export type JobTaskResult = {
   page: string;
+  routeKey?: string;
   locale: string;
   breakpoint: Breakpoint;
   status: "success" | "skipped" | "failed";

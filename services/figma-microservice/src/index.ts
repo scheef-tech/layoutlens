@@ -2,11 +2,15 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { stat } from "node:fs/promises";
 import { join, normalize, resolve } from "node:path";
+import sharp from "sharp";
 import { createJob, getJob, listJobs } from "./job-store";
+import { FigmaApiClient } from "./figma";
 import { discoverLocalesFromUrls, discoverSitemaps } from "./sitemap";
 import type { CreateJobRequest, DiscoverSitemapRequest } from "./types";
+import { getEnv, getEnvOr } from "./env";
 
 const app = new Hono();
+const figmaApi = new FigmaApiClient();
 
 app.use("*", cors());
 
@@ -24,17 +28,23 @@ app.post("/api/sitemap/discover", async (c) => {
     return c.json({ error: "baseUrl is required" }, 400);
   }
 
+  const fallbackDefaultLocale = getEnv("SITEMAP_DEFAULT_LOCALE");
   const discovered = await discoverSitemaps(
     payload.baseUrl,
     payload.maxUrls ?? 500,
-    payload.maxSitemaps ?? 20
+    payload.maxSitemaps ?? 20,
+    { defaultLocale: fallbackDefaultLocale }
   );
-  const discoveredLocales = discoverLocalesFromUrls(discovered.pageUrls);
+  const urlDerivedLocales = discoverLocalesFromUrls(discovered.pageUrls, {
+    defaultLocale: fallbackDefaultLocale
+  });
+  const discoveredLocales = [...new Set([...discovered.hreflangs, ...urlDerivedLocales])];
 
   return c.json({
     sourceSitemaps: discovered.sourceSitemaps,
     pageUrls: discovered.pageUrls,
-    discoveredLocales
+    discoveredLocales,
+    routeGroups: discovered.routeGroups
   });
 });
 
@@ -43,14 +53,12 @@ app.post("/api/jobs", async (c) => {
   if (!payload) {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
-  if (!payload.figmaFileKey) {
-    return c.json({ error: "figmaFileKey is required" }, 400);
+  const hasTargets = Array.isArray(payload.targets) && payload.targets.length > 0;
+  if (!hasTargets && (!Array.isArray(payload.pages) || payload.pages.length === 0)) {
+    return c.json({ error: "pages must contain at least one URL (or provide targets)." }, 400);
   }
-  if (!Array.isArray(payload.pages) || payload.pages.length === 0) {
-    return c.json({ error: "pages must contain at least one URL" }, 400);
-  }
-  if (!Array.isArray(payload.locales) || payload.locales.length === 0) {
-    return c.json({ error: "locales must contain at least one locale" }, 400);
+  if (!hasTargets && (!Array.isArray(payload.locales) || payload.locales.length === 0)) {
+    return c.json({ error: "locales must contain at least one locale (or provide targets)." }, 400);
   }
   if (!Array.isArray(payload.breakpoints) || payload.breakpoints.length === 0) {
     return c.json({ error: "breakpoints must contain at least one value" }, 400);
@@ -59,16 +67,56 @@ app.post("/api/jobs", async (c) => {
   const cleanBreakpoints = payload.breakpoints
     .map((value) => Number(value))
     .filter((value) => Number.isFinite(value) && value > 0);
+  const rawTargets = Array.isArray(payload.targets) ? payload.targets : [];
+  const cleanTargets = hasTargets
+    ? rawTargets
+        .filter((target) => target && typeof target.url === "string" && typeof target.locale === "string")
+        .map((target) => ({
+          url: target.url,
+          locale: target.locale.toLowerCase(),
+          routeKey: target.routeKey
+        }))
+    : undefined;
 
   if (cleanBreakpoints.length === 0) {
     return c.json({ error: "No valid breakpoints provided" }, 400);
   }
+  if (hasTargets && (!cleanTargets || cleanTargets.length === 0)) {
+    return c.json({ error: "targets must include at least one {url, locale} entry" }, 400);
+  }
 
   const job = createJob({
     ...payload,
+    targets: cleanTargets,
     breakpoints: cleanBreakpoints
   });
   return c.json(job, 201);
+});
+
+app.get("/api/figma/projects", async (c) => {
+  const teamId = c.req.query("teamId")?.trim() || getEnv("FIGMA_TEAM_ID");
+  if (!teamId) {
+    return c.json({ error: "teamId is required (or set FIGMA_TEAM_ID)." }, 400);
+  }
+  try {
+    const projects = await figmaApi.listTeamProjects(teamId);
+    return c.json({ teamId, projects });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to load projects." }, 502);
+  }
+});
+
+app.get("/api/figma/projects/:projectId/files", async (c) => {
+  const projectId = c.req.param("projectId");
+  if (!projectId) {
+    return c.json({ error: "projectId is required." }, 400);
+  }
+  try {
+    const files = await figmaApi.listProjectFiles(projectId);
+    return c.json({ projectId, files });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to load files." }, 502);
+  }
 });
 
 app.get("/api/jobs", (c) => c.json({ jobs: listJobs() }));
@@ -100,7 +148,7 @@ app.get("/api/jobs/:jobId/artifacts", async (c) => {
 app.get("/api/jobs/:jobId/artifacts/*", async (c) => {
   const jobId = c.req.param("jobId");
   const relativePath = c.req.path.replace(`/api/jobs/${jobId}/artifacts/`, "");
-  const runsRoot = resolve(process.env.RUNS_DIR?.trim() || "runs");
+  const runsRoot = resolve(getEnvOr("RUNS_DIR", "runs"));
   const targetPath = resolve(join(runsRoot, normalize(relativePath)));
   if (!targetPath.startsWith(runsRoot)) {
     return c.json({ error: "Invalid artifact path" }, 400);
@@ -112,6 +160,46 @@ app.get("/api/jobs/:jobId/artifacts/*", async (c) => {
     }
   } catch {
     return c.json({ error: "Artifact not found" }, 404);
+  }
+
+  const image = sharp(targetPath, { failOn: "none" });
+  const imageMeta = await image.metadata().catch(() => null);
+  const width = imageMeta?.width ?? 0;
+  const height = imageMeta?.height ?? 0;
+  if (c.req.query("meta") === "1") {
+    if (width <= 0 || height <= 0) {
+      return c.json({ error: "Unsupported image metadata" }, 422);
+    }
+    return c.json({ width, height });
+  }
+
+  const sliceTopRaw = c.req.query("sliceTop");
+  const sliceHeightRaw = c.req.query("sliceHeight");
+  if (sliceTopRaw || sliceHeightRaw) {
+    if (width <= 0 || height <= 0) {
+      return c.json({ error: "Unsupported image for slicing" }, 422);
+    }
+    const parsedTop = Number.parseInt(sliceTopRaw || "0", 10);
+    const parsedHeight = Number.parseInt(sliceHeightRaw || "0", 10);
+    if (!Number.isFinite(parsedTop) || !Number.isFinite(parsedHeight) || parsedTop < 0 || parsedHeight <= 0) {
+      return c.json({ error: "Invalid sliceTop/sliceHeight query values" }, 400);
+    }
+    const top = Math.min(parsedTop, Math.max(0, height - 1));
+    const extractHeight = Math.min(parsedHeight, height - top);
+    const slicedBuffer = await sharp(targetPath)
+      .extract({
+        left: 0,
+        top,
+        width,
+        height: extractHeight
+      })
+      .png()
+      .toBuffer();
+    return new Response(new Uint8Array(slicedBuffer), {
+      headers: {
+        "Content-Type": "image/png"
+      }
+    });
   }
 
   return new Response(Bun.file(targetPath), {
@@ -133,7 +221,7 @@ app.get("/dev", (c) => {
   return c.html(renderDevUi());
 });
 
-const port = Number(process.env.PORT || 8787);
+const port = Number(getEnvOr("PORT", "8787"));
 console.log(`layoutlens-figma-microservice listening on http://localhost:${port}`);
 
 export default {
@@ -142,7 +230,7 @@ export default {
 };
 
 function isAuthorizedForDevUi(authorizationHeader: string | undefined): boolean {
-  const expected = process.env.DEV_UI_BASIC_AUTH?.trim();
+  const expected = getEnv("DEV_UI_BASIC_AUTH");
   if (!expected) {
     return true;
   }
@@ -195,7 +283,7 @@ function renderDevUi(): string {
         padding: 16px;
       }
       label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
-      input, textarea, button {
+      input, textarea, button, select {
         width: 100%;
         border-radius: 8px;
         border: 1px solid var(--border);
@@ -210,6 +298,9 @@ function renderDevUi(): string {
         border-color: #314561;
       }
       button:hover { background: #253550; }
+      .btn-secondary {
+        background: #121925;
+      }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
       .row { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
       .pages {
@@ -226,6 +317,30 @@ function renderDevUi(): string {
         align-items: center;
         gap: 8px;
         color: var(--text);
+      }
+      .pages details {
+        border-bottom: 1px solid #1b2331;
+        padding: 6px 0;
+      }
+      .pages summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12px;
+        user-select: none;
+      }
+      .route-option {
+        margin-top: 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text);
+      }
+      .route-option .route-path {
+        font-size: 13px;
+      }
+      .route-option .route-locale {
+        font-size: 11px;
+        color: var(--muted);
       }
       .artifacts {
         margin-top: 16px;
@@ -244,6 +359,87 @@ function renderDevUi(): string {
         border-radius: 8px;
         background: #0b0f15;
         overflow: hidden;
+      }
+      .help {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .readonly-grid {
+        margin-top: 8px;
+        display: grid;
+        gap: 8px;
+      }
+      .readonly-item {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #0b0f15;
+        padding: 10px;
+      }
+      .readonly-item .k {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+      .readonly-item .v {
+        color: var(--text);
+        font-size: 13px;
+        word-break: break-word;
+      }
+      .inline-actions {
+        margin-top: 8px;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: 1fr 1fr;
+      }
+      .job-monitor {
+        margin-top: 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #0b0f15;
+        padding: 10px;
+      }
+      .job-monitor .row-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .progress {
+        width: 100%;
+        height: 10px;
+        background: #111826;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .progress > div {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #2f7cff 0%, #58a2ff 100%);
+        transition: width 200ms ease;
+      }
+      .post-job {
+        margin-top: 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #0b0f15;
+        padding: 10px;
+      }
+      .post-job.hidden {
+        display: none;
+      }
+      .post-job h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+      }
+      .post-job ol {
+        margin: 8px 0 0 18px;
+        color: var(--muted);
+        font-size: 12px;
       }
       .artifact-item img {
         width: 100%;
@@ -284,20 +480,74 @@ function renderDevUi(): string {
         <label>Discovered locales</label>
         <input id="locales" placeholder="en,de,fr" />
         <label>Page selection</label>
+        <div class="artifact-filters">
+          <select id="pageLocaleFilter">
+            <option value="">All locales</option>
+          </select>
+          <div></div>
+        </div>
+        <div class="inline-actions">
+          <button id="selectAllPagesBtn" type="button" class="btn-secondary">Select all</button>
+          <button id="selectNoPagesBtn" type="button" class="btn-secondary">Select none</button>
+        </div>
         <div id="pages" class="pages"></div>
       </section>
 
       <section class="card">
         <h2>Job Creation</h2>
-        <label>Figma file key</label>
-        <input id="figmaFileKey" placeholder="ABCD1234..." />
-        <label>Figma target node id (for dev resource links)</label>
-        <input id="figmaNodeId" placeholder="1:2" />
-        <label>Artifact public base URL (optional)</label>
-        <input id="artifactPublicBaseUrl" placeholder="https://your-service.example.com" />
+        <label>Figma team id</label>
+        <input id="figmaTeamId" value="${escapeHtml(getEnv("FIGMA_TEAM_ID") || "")}" placeholder="123456789..." />
+        <button id="loadProjectsBtn" class="btn-secondary">Load projects</button>
+        <div class="inline-actions">
+          <button id="openTeamInFigmaBtn" type="button" class="btn-secondary">Create project in Figma</button>
+          <button id="reloadProjectsBtn" type="button" class="btn-secondary">Reload projects</button>
+        </div>
+        <label>Project (folder)</label>
+        <select id="figmaProjectSelect">
+          <option value="">Select project</option>
+        </select>
+        <div class="inline-actions">
+          <button id="openProjectInFigmaBtn" type="button" class="btn-secondary">Create file in Figma</button>
+          <button id="reloadFilesBtn" type="button" class="btn-secondary">Reload files</button>
+        </div>
+        <label>File</label>
+        <select id="figmaFileSelect">
+          <option value="">Select file</option>
+        </select>
+        <div class="readonly-grid">
+          <div class="readonly-item">
+            <div class="k">Figma write integration</div>
+            <div class="v">${escapeHtml(getDevUiConfig().figmaWriteState)}</div>
+          </div>
+          <div class="readonly-item">
+            <div class="k">Import path</div>
+            <div class="v">${escapeHtml(getDevUiConfig().importFlow)}</div>
+          </div>
+        </div>
+        <div class="help">Create project/file via the Figma web page buttons above, then reload here and continue.</div>
         <label>Breakpoints (comma-separated)</label>
         <input id="breakpoints" value="375,768,1440" />
         <button id="createJobBtn">Create import job</button>
+        <div id="jobMonitor" class="job-monitor">
+          <div class="row-line"><span>Job</span><span id="jobIdLabel">-</span></div>
+          <div class="row-line"><span>Status</span><span id="jobStatusLabel">idle</span></div>
+          <div class="row-line"><span>Progress</span><span id="jobProgressLabel">0 / 0</span></div>
+          <div class="progress"><div id="jobProgressBar"></div></div>
+          <div class="row-line"><span>Latest task</span><span id="jobLatestTask">-</span></div>
+        </div>
+        <div id="postJobActions" class="post-job hidden">
+          <h3>Job complete: next steps</h3>
+          <div class="row-line"><span>Job ID</span><span id="postJobId" class="mono">-</span></div>
+          <div class="inline-actions">
+            <button id="copyJobIdBtn" type="button" class="btn-secondary">Copy job id</button>
+            <button id="openFileInFigmaBtn" type="button" class="btn-secondary">Open file in Figma</button>
+          </div>
+          <ol>
+            <li>Run the <span class="mono">Plugins/layoutlens Importer</span> plugin in this Figma file.</li>
+            <li>Set plugin base URL to <span id="postJobBaseUrl" class="mono">-</span>.</li>
+            <li>Paste job id in plugin UI: <span id="postJobIdInline" class="mono">-</span>.</li>
+          </ol>
+        </div>
         <label>Last response</label>
         <pre id="output" class="mono"></pre>
         <label>Artifacts</label>
@@ -317,17 +567,150 @@ function renderDevUi(): string {
       const pagesEl = document.getElementById("pages");
       const outputEl = document.getElementById("output");
       const artifactsEl = document.getElementById("artifacts");
+      const pageLocaleFilterEl = document.getElementById("pageLocaleFilter");
+      const jobIdLabelEl = document.getElementById("jobIdLabel");
+      const jobStatusLabelEl = document.getElementById("jobStatusLabel");
+      const jobProgressLabelEl = document.getElementById("jobProgressLabel");
+      const jobProgressBarEl = document.getElementById("jobProgressBar");
+      const jobLatestTaskEl = document.getElementById("jobLatestTask");
+      const postJobActionsEl = document.getElementById("postJobActions");
+      const postJobIdEl = document.getElementById("postJobId");
+      const postJobBaseUrlEl = document.getElementById("postJobBaseUrl");
+      const postJobIdInlineEl = document.getElementById("postJobIdInline");
+      const figmaTeamIdEl = document.getElementById("figmaTeamId");
+      const figmaProjectSelectEl = document.getElementById("figmaProjectSelect");
+      const figmaFileSelectEl = document.getElementById("figmaFileSelect");
       const artifactLocaleFilterEl = document.getElementById("artifactLocaleFilter");
       const artifactBreakpointFilterEl = document.getElementById("artifactBreakpointFilter");
       let allArtifacts = [];
       let activeJobId = "";
+      let activePollToken = 0;
+      let discoveredLocales = [];
+      let discoveredRouteGroups = [];
+      const selectedRouteIds = new Set();
 
       function setOutput(value) {
         outputEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
       }
 
+      function setJobMonitorState(job) {
+        if (!job) {
+          jobIdLabelEl.textContent = "-";
+          jobStatusLabelEl.textContent = "idle";
+          jobProgressLabelEl.textContent = "0 / 0";
+          jobProgressBarEl.style.width = "0%";
+          jobLatestTaskEl.textContent = "-";
+          return;
+        }
+        const done = (job.summary?.completed || 0) + (job.summary?.failed || 0);
+        const total = job.summary?.total || 0;
+        const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+        const latest = (job.tasks || [])[job.tasks.length - 1];
+        jobIdLabelEl.textContent = job.id || "-";
+        jobStatusLabelEl.textContent = job.status || "unknown";
+        jobProgressLabelEl.textContent = done + " / " + total + " (" + percent + "%)";
+        jobProgressBarEl.style.width = percent + "%";
+        jobLatestTaskEl.textContent = latest
+          ? latest.locale + "/" + latest.breakpoint + " " + latest.status
+          : "-";
+      }
+
+      function hidePostJobActions() {
+        postJobActionsEl.classList.add("hidden");
+      }
+
+      function showPostJobActions(jobId) {
+        postJobIdEl.textContent = jobId;
+        postJobIdInlineEl.textContent = jobId;
+        postJobBaseUrlEl.textContent = window.location.origin;
+        postJobActionsEl.classList.remove("hidden");
+      }
+
       function clearArtifacts() {
         artifactsEl.innerHTML = "";
+      }
+
+      function getFilteredRouteGroups() {
+        const localeFilter = pageLocaleFilterEl.value;
+        if (!localeFilter) {
+          return discoveredRouteGroups;
+        }
+        return discoveredRouteGroups.filter((group) => !!group.locales[localeFilter]);
+      }
+
+      function populatePageLocaleFilter() {
+        pageLocaleFilterEl.innerHTML = '<option value="">All locales</option>';
+        for (const locale of discoveredLocales) {
+          const option = document.createElement("option");
+          option.value = locale;
+          option.textContent = locale;
+          pageLocaleFilterEl.appendChild(option);
+        }
+      }
+
+      function renderPagesList() {
+        pagesEl.innerHTML = "";
+        const filteredGroups = getFilteredRouteGroups();
+        if (filteredGroups.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "help";
+          empty.textContent = "No routes match current locale filter.";
+          pagesEl.appendChild(empty);
+          return;
+        }
+
+        const grouped = new Map();
+        for (const routeGroup of filteredGroups) {
+          const route = routeGroup.displayPath || "/";
+          const key = route === "/" ? "home" : route.split("/").filter(Boolean)[0] || "other";
+          if (!grouped.has(key)) {
+            grouped.set(key, []);
+          }
+          grouped.get(key).push(routeGroup);
+        }
+
+        const sortedGroups = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+        for (const [groupName, routeGroups] of sortedGroups) {
+          routeGroups.sort((a, b) => (a.displayPath || "/").localeCompare(b.displayPath || "/"));
+          const details = document.createElement("details");
+          details.open = groupName === "home";
+
+          const summary = document.createElement("summary");
+          summary.textContent = groupName + " (" + routeGroups.length + ")";
+          details.appendChild(summary);
+
+          for (const routeGroup of routeGroups) {
+            const label = document.createElement("label");
+            label.className = "route-option";
+
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.checked = selectedRouteIds.has(routeGroup.id);
+            input.value = routeGroup.id;
+            input.addEventListener("change", () => {
+              if (input.checked) {
+                selectedRouteIds.add(routeGroup.id);
+              } else {
+                selectedRouteIds.delete(routeGroup.id);
+              }
+            });
+
+            const path = document.createElement("span");
+            path.className = "route-path";
+            path.textContent = routeGroup.displayPath || "/";
+
+            const localeBadge = document.createElement("span");
+            localeBadge.className = "route-locale";
+            localeBadge.textContent = Object.keys(routeGroup.locales || {}).sort().join(", ");
+
+            label.appendChild(input);
+            label.appendChild(path);
+            label.appendChild(localeBadge);
+            details.appendChild(label);
+          }
+
+          pagesEl.appendChild(details);
+        }
       }
 
       function resetArtifactFilters() {
@@ -370,7 +753,7 @@ function renderDevUi(): string {
         });
         for (const artifact of filtered) {
           const card = document.createElement("a");
-          const relPath = artifact.path.replace(/^runs\//, "");
+          const relPath = artifact.path.startsWith("runs/") ? artifact.path.slice(5) : artifact.path;
           const encodedRelPath = relPath
             .split("/")
             .map((segment) => encodeURIComponent(segment))
@@ -410,11 +793,122 @@ function renderDevUi(): string {
         renderArtifacts();
       }
 
+      async function pollJobUntilDone(jobId) {
+        activePollToken += 1;
+        const pollToken = activePollToken;
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          if (pollToken !== activePollToken) {
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          const statusRes = await fetch("/api/jobs/" + jobId, { cache: "no-store" });
+          const status = await statusRes.json();
+          setJobMonitorState(status);
+          if (attempt % 4 === 0 || status.status === "success" || status.status === "failed") {
+            setOutput(status);
+          }
+          if (status.status === "success" || status.status === "failed") {
+            await loadArtifacts(jobId);
+            showPostJobActions(jobId);
+            return;
+          }
+        }
+      }
+
       function parseCsv(value) {
         return value
           .split(",")
           .map((v) => v.trim())
           .filter(Boolean);
+      }
+
+      function resetFileSelect() {
+        figmaFileSelectEl.innerHTML = '<option value="">Select file</option>';
+      }
+
+      function setAllPageSelections(checked) {
+        for (const routeGroup of getFilteredRouteGroups()) {
+          if (checked) {
+            selectedRouteIds.add(routeGroup.id);
+          } else {
+            selectedRouteIds.delete(routeGroup.id);
+          }
+        }
+        renderPagesList();
+      }
+
+      function resetProjectSelect() {
+        figmaProjectSelectEl.innerHTML = '<option value="">Select project</option>';
+        resetFileSelect();
+      }
+
+      async function loadProjects() {
+        const teamId = figmaTeamIdEl.value.trim();
+        if (!teamId) {
+          setOutput({ error: "Enter a Figma team id first." });
+          return;
+        }
+        setOutput("Loading Figma projects...");
+        resetProjectSelect();
+        const res = await fetch("/api/figma/projects?teamId=" + encodeURIComponent(teamId));
+        const json = await res.json();
+        setOutput(json);
+        if (!res.ok) {
+          return;
+        }
+        for (const project of json.projects || []) {
+          const option = document.createElement("option");
+          option.value = project.id;
+          option.textContent = project.name + " (" + project.id + ")";
+          figmaProjectSelectEl.appendChild(option);
+        }
+      }
+
+      async function loadFilesForProject(projectId) {
+        resetFileSelect();
+        if (!projectId) {
+          return;
+        }
+        setOutput("Loading files...");
+        const res = await fetch("/api/figma/projects/" + encodeURIComponent(projectId) + "/files");
+        const json = await res.json();
+        setOutput(json);
+        if (!res.ok) {
+          return;
+        }
+        for (const file of json.files || []) {
+          const option = document.createElement("option");
+          option.value = file.key;
+          option.textContent = file.name + " (" + file.key + ")";
+          figmaFileSelectEl.appendChild(option);
+        }
+      }
+
+      function openTeamInFigma() {
+        const teamId = figmaTeamIdEl.value.trim();
+        if (!teamId) {
+          setOutput({ error: "Enter team id first." });
+          return;
+        }
+        window.open("https://www.figma.com/files/team/" + encodeURIComponent(teamId), "_blank", "noreferrer");
+      }
+
+      function openProjectInFigma() {
+        const projectId = figmaProjectSelectEl.value.trim();
+        if (!projectId) {
+          setOutput({ error: "Select project first." });
+          return;
+        }
+        window.open("https://www.figma.com/files/project/" + encodeURIComponent(projectId), "_blank", "noreferrer");
+      }
+
+      function openSelectedFileInFigma() {
+        const fileKey = figmaFileSelectEl.value.trim();
+        if (!fileKey) {
+          setOutput({ error: "Select a Figma file first." });
+          return;
+        }
+        window.open("https://www.figma.com/file/" + encodeURIComponent(fileKey), "_blank", "noreferrer");
       }
 
       document.getElementById("discoverBtn").addEventListener("click", async () => {
@@ -439,33 +933,57 @@ function renderDevUi(): string {
           setOutput(json);
           return;
         }
-        const locales = json.discoveredLocales?.length ? json.discoveredLocales.join(",") : "en";
-        document.getElementById("locales").value = locales;
-        for (const page of json.pageUrls || []) {
-          const label = document.createElement("label");
-          const input = document.createElement("input");
-          input.type = "checkbox";
-          input.checked = true;
-          input.value = page;
-          label.appendChild(input);
-          label.appendChild(document.createTextNode(page));
-          pagesEl.appendChild(label);
+        discoveredRouteGroups = json.routeGroups || [];
+        discoveredLocales = (json.discoveredLocales || []).slice().sort();
+        selectedRouteIds.clear();
+        for (const group of discoveredRouteGroups) {
+          selectedRouteIds.add(group.id);
         }
+        populatePageLocaleFilter();
+        renderPagesList();
+        const locales = discoveredLocales.length ? discoveredLocales.join(",") : "en";
+        document.getElementById("locales").value = locales;
         setOutput(json);
       });
 
       document.getElementById("createJobBtn").addEventListener("click", async () => {
-        const pages = [...pagesEl.querySelectorAll('input[type="checkbox"]:checked')].map((el) => el.value);
+        const selectedLocales = parseCsv(document.getElementById("locales").value).map((value) =>
+          value.toLowerCase()
+        );
+        const selectedGroups = discoveredRouteGroups.filter((group) => selectedRouteIds.has(group.id));
+        const targets = [];
+        for (const group of selectedGroups) {
+          for (const locale of selectedLocales) {
+            const url = group.locales?.[locale];
+            if (!url) {
+              continue;
+            }
+            targets.push({
+              url,
+              locale,
+              routeKey: group.id
+            });
+          }
+        }
+        if (selectedGroups.length === 0) {
+          setOutput({ error: "Select at least one route." });
+          return;
+        }
+        if (targets.length === 0) {
+          setOutput({
+            error: "No locale-specific URLs available for current route+locale selection. Adjust locales or route filter."
+          });
+          return;
+        }
         const payload = {
-          figmaFileKey: document.getElementById("figmaFileKey").value.trim(),
-          figmaNodeId: document.getElementById("figmaNodeId").value.trim() || undefined,
-          artifactPublicBaseUrl:
-            document.getElementById("artifactPublicBaseUrl").value.trim() || undefined,
-          pages,
-          locales: parseCsv(document.getElementById("locales").value),
+          pages: [],
+          locales: selectedLocales,
+          targets,
           breakpoints: parseCsv(document.getElementById("breakpoints").value).map((v) => Number(v))
         };
         setOutput("Creating job...");
+        setJobMonitorState(null);
+        hidePostJobActions();
         clearArtifacts();
         allArtifacts = [];
         activeJobId = "";
@@ -479,23 +997,61 @@ function renderDevUi(): string {
         setOutput(json);
 
         if (!json?.id) return;
-        let attempts = 0;
-        while (attempts < 60) {
-          attempts += 1;
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          const statusRes = await fetch("/api/jobs/" + json.id);
-          const status = await statusRes.json();
-          setOutput(status);
-          if (status.status === "success" || status.status === "failed") {
-            await loadArtifacts(json.id);
-            break;
-          }
-        }
+        setJobMonitorState(json);
+        pollJobUntilDone(json.id);
       });
 
       artifactLocaleFilterEl.addEventListener("change", renderArtifacts);
       artifactBreakpointFilterEl.addEventListener("change", renderArtifacts);
+      document.getElementById("loadProjectsBtn").addEventListener("click", loadProjects);
+      document.getElementById("reloadProjectsBtn").addEventListener("click", loadProjects);
+      document.getElementById("openTeamInFigmaBtn").addEventListener("click", openTeamInFigma);
+      document.getElementById("openProjectInFigmaBtn").addEventListener("click", openProjectInFigma);
+      document.getElementById("openFileInFigmaBtn").addEventListener("click", openSelectedFileInFigma);
+      document.getElementById("copyJobIdBtn").addEventListener("click", async () => {
+        const value = postJobIdEl.textContent || "";
+        if (!value || value === "-") {
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(value);
+          setOutput("Copied job id to clipboard.");
+        } catch {
+          setOutput({ error: "Clipboard write failed. Copy job id manually." });
+        }
+      });
+      pageLocaleFilterEl.addEventListener("change", renderPagesList);
+      document.getElementById("selectAllPagesBtn").addEventListener("click", () => setAllPageSelections(true));
+      document.getElementById("selectNoPagesBtn").addEventListener("click", () => setAllPageSelections(false));
+      document.getElementById("reloadFilesBtn").addEventListener("click", () => {
+        loadFilesForProject(figmaProjectSelectEl.value);
+      });
+      figmaProjectSelectEl.addEventListener("change", (event) => {
+        loadFilesForProject(event.target.value);
+      });
+
+      if (figmaTeamIdEl.value.trim()) {
+        loadProjects();
+      }
+      setJobMonitorState(null);
+      hidePostJobActions();
     </script>
   </body>
 </html>`;
+}
+
+function getDevUiConfig(): { figmaWriteState: string; importFlow: string } {
+  return {
+    figmaWriteState: "Disabled (capture-only jobs)",
+    importFlow: "Plugin pulls artifacts via /api/jobs/:jobId/artifacts/*"
+  };
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }

@@ -50,6 +50,8 @@ If `DEV_UI_BASIC_AUTH` is empty, `/dev` is public.
 - `GET /health`
 - `POST /api/sitemap/discover`
 - `POST /api/jobs`
+- `GET /api/figma/projects?teamId=<id>`
+- `GET /api/figma/projects/:projectId/files`
 - `GET /api/jobs`
 - `GET /api/jobs/:jobId`
 - `GET /api/jobs/:jobId/artifacts`
@@ -57,33 +59,44 @@ If `DEV_UI_BASIC_AUTH` is empty, `/dev` is public.
 
 ## Figma token
 
-Set `FIGMA_TOKEN` to enable Figma write integration:
+`FIGMA_TOKEN` is only needed for listing team/project/file data in the Dev UI:
 
 ```bash
 FIGMA_TOKEN=... bun run dev
 ```
 
-Current write mode uses the Figma REST `dev_resources` endpoint:
-
-- each captured artifact URL is linked as a Dev Resource on a target node
-- set target node via request `figmaNodeId` or env `FIGMA_TARGET_NODE_ID`
-- service needs a public base URL to build artifact links (`artifactPublicBaseUrl` or `ARTIFACT_PUBLIC_BASE_URL`)
+Capture jobs are now capture-only; the plugin imports artifacts into canvas.
 
 Environment flags:
 
-- `FIGMA_WRITE_MODE=dev_resources` (default)
-- `FIGMA_TARGET_NODE_ID=1:2`
-- `ARTIFACT_PUBLIC_BASE_URL=https://your-service.example.com`
+- `FIGMA_TEAM_ID=...` (for dev UI project/file picker default)
+- `JOB_CONCURRENCY=3`
+- `FIGMA_API_TIMEOUT_MS=30000`
+- `PLAYWRIGHT_LAUNCH_TIMEOUT_MS=30000`
+- `CAPTURE_NAV_TIMEOUT_MS=90000`
 
-If `FIGMA_TOKEN` is missing, the service captures screenshots but skips Figma writes.
+Note on creating projects/files:
+
+- Public Figma REST currently supports listing teams/projects/files but not creating project/file entities.
+- `/dev` includes buttons to open the correct Figma web pages (team/project) so you can create there and reload selectors.
+
+If `FIGMA_TOKEN` is missing, only Figma project/file listing endpoints are unavailable.
 
 ## Capture behavior
 
 - Uses Playwright Chromium in headless mode.
+- Reuses one browser per job and runs task workers concurrently.
 - Stores screenshots under `runs/<jobId>/<locale>/<route>/<breakpoint>.png`.
 - Writes a `manifest.json` to `runs/<jobId>/manifest.json`.
 - Sends `Accept-Language` by default (`sendAcceptLanguage` can disable this in job payload).
 - Supports locale cookie injection via `localeCookie` in job payload, or env fallback `LOCALE_COOKIE_NAME`.
+- No Figma write calls are executed during jobs.
+
+## Locale discovery behavior
+
+- `discoveredLocales` is now built from sitemap `xhtml:link hreflang` values first.
+- URL-prefix locales (like `/en/...`) are still detected as a fallback.
+- Optional env `SITEMAP_DEFAULT_LOCALE` adds your default locale when routes are unprefixed.
 
 ## Docker (Coolify-friendly)
 
@@ -97,9 +110,6 @@ docker run --rm -p 8787:8787 \
   -e PORT=8787 \
   -e DEV_UI_BASIC_AUTH=admin:change-me \
   -e PLAYWRIGHT_CHROMIUM_ARGS="--no-sandbox --disable-setuid-sandbox" \
-  -e FIGMA_WRITE_MODE=dev_resources \
-  -e FIGMA_TARGET_NODE_ID=1:2 \
-  -e ARTIFACT_PUBLIC_BASE_URL=https://your-service.example.com \
   -e FIGMA_TOKEN=your_token_here \
   layoutlens-figma-microservice
 ```
@@ -114,6 +124,4 @@ Optional runtime mode:
 - Set **Port** to `8787` (or set your `PORT` env to whatever Coolify maps).
 - Set `DEV_UI_BASIC_AUTH` in Coolify env vars to protect `/dev`.
 - Set `PLAYWRIGHT_CHROMIUM_ARGS=--no-sandbox --disable-setuid-sandbox` if your Coolify runtime requires it.
-- Set `FIGMA_TOKEN` for Figma writes.
-- Set `FIGMA_TARGET_NODE_ID` to the node where Dev Resource links should be attached.
-- Set `ARTIFACT_PUBLIC_BASE_URL` to your deployed service URL so Figma links are reachable.
+- Set `FIGMA_TOKEN` only if you want Figma team/project/file listing in `/dev`.

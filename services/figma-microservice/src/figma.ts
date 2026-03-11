@@ -1,104 +1,85 @@
-import type { PageSelection } from "./types";
+import { getEnv, getEnvInt } from "./env";
 
-export type FigmaWriteResult = {
-  status: "success" | "skipped" | "failed";
-  message: string;
+export type FigmaProject = {
+  id: string;
+  name: string;
 };
 
-type CreateOrUpdateFrameInput = {
-  fileKey: string;
-  selection: PageSelection;
-  artifactUrl?: string;
-  nodeId?: string;
+export type FigmaProjectFile = {
+  key: string;
+  name: string;
+  lastModified?: string;
 };
 
 export class FigmaApiClient {
   private readonly token: string | undefined;
 
-  public constructor(token = process.env.FIGMA_TOKEN) {
+  public constructor(token = getEnv("FIGMA_TOKEN")) {
     this.token = token;
   }
 
-  public async verifyFileAccess(fileKey: string): Promise<void> {
-    if (!this.token) {
-      return;
-    }
-    const response = await fetch(`https://api.figma.com/v1/files/${fileKey}`, {
-      headers: {
-        "X-Figma-Token": this.token
+  public async listTeamProjects(teamId: string): Promise<FigmaProject[]> {
+    this.ensureToken();
+    const response = await this.fetchWithTimeout(
+      `https://api.figma.com/v1/teams/${encodeURIComponent(teamId)}/projects`,
+      {
+        headers: {
+          "X-Figma-Token": this.token!
+        }
       }
-    });
-
+    );
     if (!response.ok) {
-      throw new Error(`Figma file lookup failed: ${response.status} ${response.statusText}`);
+      throw new Error(`Figma team projects lookup failed: ${response.status} ${response.statusText}`);
     }
+    const json = (await response.json()) as { projects?: Array<{ id: string; name: string }> };
+    return (json.projects || []).map((project) => ({
+      id: project.id,
+      name: project.name
+    }));
   }
 
-  public async createOrUpdateFrame(input: CreateOrUpdateFrameInput): Promise<FigmaWriteResult> {
-    const mode = process.env.FIGMA_WRITE_MODE?.trim() || "dev_resources";
-    if (!this.token) {
-      return {
-        status: "skipped",
-        message: "No FIGMA_TOKEN set; ran as dry-run."
-      };
-    }
-
-    await this.verifyFileAccess(input.fileKey);
-
-    if (mode !== "dev_resources") {
-      return {
-        status: "skipped",
-        message: `FIGMA_WRITE_MODE=${mode} is not supported.`
-      };
-    }
-
-    const nodeId = input.nodeId || process.env.FIGMA_TARGET_NODE_ID;
-    if (!nodeId) {
-      return {
-        status: "skipped",
-        message: "No figmaNodeId provided; skipping Figma write."
-      };
-    }
-    if (!input.artifactUrl) {
-      return {
-        status: "skipped",
-        message: "No artifact URL available for Figma write."
-      };
-    }
-
-    const response = await fetch("https://api.figma.com/v1/dev_resources", {
-      method: "POST",
-      headers: {
-        "X-Figma-Token": this.token,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        file_key: input.fileKey,
-        node_id: nodeId,
-        name: `${input.selection.routeKey} · ${input.selection.locale} · ${input.selection.breakpoint}`,
-        url: input.artifactUrl
-      })
-    });
-
+  public async listProjectFiles(projectId: string): Promise<FigmaProjectFile[]> {
+    this.ensureToken();
+    const response = await this.fetchWithTimeout(
+      `https://api.figma.com/v1/projects/${encodeURIComponent(projectId)}/files`,
+      {
+        headers: {
+          "X-Figma-Token": this.token!
+        }
+      }
+    );
     if (!response.ok) {
-      const reason = await safeReadBody(response);
-      return {
-        status: "failed",
-        message: `Figma dev resource write failed (${response.status}): ${reason}`
-      };
+      throw new Error(`Figma project files lookup failed: ${response.status} ${response.statusText}`);
     }
-
-    return {
-      status: "success",
-      message: `Linked artifact on node ${nodeId} for ${input.selection.routeKey} (${input.selection.locale}/${input.selection.breakpoint}).`
+    const json = (await response.json()) as {
+      files?: Array<{ key: string; name: string; last_modified?: string }>;
     };
+    return (json.files || []).map((file) => ({
+      key: file.key,
+      name: file.name,
+      lastModified: file.last_modified
+    }));
   }
-}
 
-async function safeReadBody(response: Response): Promise<string> {
-  try {
-    return (await response.text()).slice(0, 400);
-  } catch {
-    return response.statusText;
+
+  private ensureToken(): void {
+    if (!this.token) {
+      throw new Error("FIGMA_TOKEN is required for this operation.");
+    }
+  }
+
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const timeoutMs = getEnvInt("FIGMA_API_TIMEOUT_MS", 30000);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort("timeout"), timeoutMs);
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }

@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { FigmaApiClient } from "./figma";
 import type { CreateJobRequest, ImportJob } from "./types";
 import { toPageSelections } from "./selection";
-import { captureSelection } from "./capture";
+import { createCaptureRunner } from "./capture";
+import { getEnvInt, getEnvOr } from "./env";
+import { logEvent } from "./logger";
 
 const jobs = new Map<string, ImportJob>();
 const jobInputs = new Map<string, CreateJobRequest>();
-const figma = new FigmaApiClient();
 
 export function listJobs(): ImportJob[] {
   return [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -21,10 +21,15 @@ export function getJob(jobId: string): ImportJob | undefined {
 export function createJob(payload: CreateJobRequest): ImportJob {
   const jobId = randomUUID();
   const now = new Date().toISOString();
-  const selections = toPageSelections(payload.pages, payload.locales, payload.breakpoints);
+  const selections = toPageSelections(
+    payload.pages || [],
+    payload.locales || [],
+    payload.breakpoints || [],
+    payload.targets
+  );
   const job: ImportJob = {
     id: jobId,
-    figmaFileKey: payload.figmaFileKey,
+    figmaFileKey: payload.figmaFileKey || "",
     createdAt: now,
     updatedAt: now,
     status: "queued",
@@ -36,7 +41,7 @@ export function createJob(payload: CreateJobRequest): ImportJob {
       failed: 0
     },
     tasks: [],
-    runDir: join(process.env.RUNS_DIR?.trim() || "runs", jobId)
+    runDir: join(getEnvOr("RUNS_DIR", "runs"), jobId)
   };
 
   jobs.set(job.id, job);
@@ -57,22 +62,44 @@ async function runJob(jobId: string): Promise<void> {
     job.updatedAt = new Date().toISOString();
     return;
   }
+  const jobRef = job;
+  const inputRef = input;
 
-  job.status = "running";
-  job.updatedAt = new Date().toISOString();
+  jobRef.status = "running";
+  jobRef.updatedAt = new Date().toISOString();
+  logEvent("INFO", "job.started", {
+    jobId: jobRef.id,
+    totalTasks: jobRef.selections.length
+  });
 
-  for (const selection of job.selections) {
+  const runner = await createCaptureRunner(inputRef, jobRef.id);
+  const concurrency = Math.max(1, getEnvInt("JOB_CONCURRENCY", 3));
+  let nextIndex = 0;
+
+  async function runSingle(selectionIndex: number): Promise<void> {
+    const selection = jobRef.selections[selectionIndex];
+    const taskStart = Date.now();
+    logEvent("INFO", "job.task.started", {
+      jobId: jobRef.id,
+      index: selectionIndex + 1,
+      total: jobRef.summary.total,
+      locale: selection.locale,
+      breakpoint: selection.breakpoint,
+      route: selection.url
+    });
+
     try {
-      const capture = await captureSelection(input, job.id, selection);
-      const artifactUrl = toArtifactPublicUrl(job.id, capture.artifactPath, input);
-      const result = await figma.createOrUpdateFrame({
-        fileKey: job.figmaFileKey,
-        selection,
-        artifactUrl,
-        nodeId: input.figmaNodeId
-      });
-      job.tasks.push({
+      const captureStart = Date.now();
+      const capture = await runner.capture(selection);
+      const captureMs = Date.now() - captureStart;
+      const figmaMs = 0;
+      const result = {
+        status: "success" as const,
+        message: "Capture stored for plugin import."
+      };
+      jobRef.tasks.push({
         page: selection.url,
+        routeKey: selection.routeKey,
         locale: selection.locale,
         breakpoint: selection.breakpoint,
         status: result.status,
@@ -80,55 +107,76 @@ async function runJob(jobId: string): Promise<void> {
         artifactPath: capture.artifactPath
       });
 
-      if (result.status === "failed") {
-        job.summary.failed += 1;
-      } else {
-        job.summary.completed += 1;
-      }
+      jobRef.summary.completed += 1;
+      const compactMessage = result.message.replaceAll(/\s+/g, " ").slice(0, 240);
+      logEvent("INFO", "job.task.completed", {
+        jobId: jobRef.id,
+        index: selectionIndex + 1,
+        total: jobRef.summary.total,
+        status: result.status,
+        locale: selection.locale,
+        breakpoint: selection.breakpoint,
+        elapsedMs: Date.now() - taskStart,
+        captureMs,
+        figmaMs,
+        message: compactMessage
+      });
     } catch (error) {
-      job.summary.failed += 1;
-      job.tasks.push({
+      jobRef.summary.failed += 1;
+      jobRef.tasks.push({
         page: selection.url,
+        routeKey: selection.routeKey,
         locale: selection.locale,
         breakpoint: selection.breakpoint,
         status: "failed",
         message: error instanceof Error ? error.message : "Unknown error"
       });
+      const errorMessage =
+        error instanceof Error ? error.message.replaceAll(/\s+/g, " ").slice(0, 240) : "Unknown error";
+      logEvent("ERROR", "job.task.failed", {
+        jobId: jobRef.id,
+        index: selectionIndex + 1,
+        total: jobRef.summary.total,
+        locale: selection.locale,
+        breakpoint: selection.breakpoint,
+        elapsedMs: Date.now() - taskStart,
+        error: errorMessage
+      });
     }
-    job.updatedAt = new Date().toISOString();
+    jobRef.updatedAt = new Date().toISOString();
   }
 
-  job.status = job.summary.failed > 0 ? "failed" : "success";
-  if (!process.env.FIGMA_TOKEN) {
-    job.warnings.push("FIGMA_TOKEN is not set. Job executed as dry-run.");
+  async function worker(): Promise<void> {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= jobRef.selections.length) {
+        return;
+      }
+      await runSingle(current);
+    }
   }
-  await writeManifest(job);
-  job.updatedAt = new Date().toISOString();
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(concurrency, jobRef.selections.length) }, () => worker()));
+  } finally {
+    await runner.close();
+  }
+
+  jobRef.status = jobRef.summary.failed > 0 ? "failed" : "success";
+  await writeManifest(jobRef);
+  jobRef.updatedAt = new Date().toISOString();
+  logEvent("INFO", "job.finished", {
+    jobId: jobRef.id,
+    status: jobRef.status,
+    completed: jobRef.summary.completed,
+    failed: jobRef.summary.failed
+  });
 }
 
 async function writeManifest(job: ImportJob): Promise<void> {
-  const manifestPath = join(process.env.RUNS_DIR?.trim() || "runs", job.id, "manifest.json");
-  await mkdir(join(process.env.RUNS_DIR?.trim() || "runs", job.id), { recursive: true });
+  const runsDir = getEnvOr("RUNS_DIR", "runs");
+  const manifestPath = join(runsDir, job.id, "manifest.json");
+  await mkdir(join(runsDir, job.id), { recursive: true });
   await Bun.write(manifestPath, JSON.stringify(job, null, 2));
-}
-
-function toArtifactPublicUrl(
-  jobId: string,
-  artifactPath: string,
-  input: CreateJobRequest
-): string | undefined {
-  const baseUrl = input.artifactPublicBaseUrl || process.env.ARTIFACT_PUBLIC_BASE_URL;
-  if (!baseUrl) {
-    return undefined;
-  }
-  const runsDir = (process.env.RUNS_DIR?.trim() || "runs").replace(/\/+$/, "");
-  const runsPrefix = `${runsDir}/`;
-  const relativePath = artifactPath.startsWith(runsPrefix)
-    ? artifactPath.slice(runsPrefix.length)
-    : artifactPath;
-  const encoded = relativePath
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  return `${baseUrl.replace(/\/+$/, "")}/api/jobs/${encodeURIComponent(jobId)}/artifacts/${encoded}`;
 }

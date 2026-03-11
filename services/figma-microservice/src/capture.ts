@@ -1,9 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { chromium } from "playwright";
+import { chromium, type BrowserContext } from "playwright";
 import type { CreateJobRequest, PageSelection } from "./types";
+import { getEnv, getEnvInt, getEnvOr } from "./env";
 
-type CaptureResult = {
+export type CaptureResult = {
   artifactPath: string;
   width: number;
   height: number;
@@ -28,7 +29,7 @@ function toRouteSlug(url: string): string {
 }
 
 function getBaseRunsDir(): string {
-  return process.env.RUNS_DIR?.trim() || "runs";
+  return getEnvOr("RUNS_DIR", "runs");
 }
 
 function getLocaleCookieConfig(
@@ -44,7 +45,7 @@ function getLocaleCookieConfig(
   sameSite: "Lax" | "Strict" | "None";
 } | null {
   const explicit = request.localeCookie;
-  const envName = process.env.LOCALE_COOKIE_NAME?.trim();
+  const envName = getEnv("LOCALE_COOKIE_NAME");
   const cookieName = explicit?.name || envName;
   if (!cookieName) {
     return null;
@@ -67,60 +68,107 @@ export async function captureSelection(
   jobId: string,
   selection: PageSelection
 ): Promise<CaptureResult> {
+  const runner = await createCaptureRunner(request, jobId);
+  try {
+    return await runner.capture(selection);
+  } finally {
+    await runner.close();
+  }
+}
+
+export type CaptureRunner = {
+  capture: (selection: PageSelection) => Promise<CaptureResult>;
+  close: () => Promise<void>;
+};
+
+export async function createCaptureRunner(
+  request: CreateJobRequest,
+  jobId: string
+): Promise<CaptureRunner> {
   const browser = await chromium.launch({
     headless: true,
-    args: process.env.PLAYWRIGHT_CHROMIUM_ARGS?.split(" ").filter(Boolean) || []
+    args: (getEnv("PLAYWRIGHT_CHROMIUM_ARGS") || "").split(" ").filter(Boolean),
+    timeout: getEnvInt("PLAYWRIGHT_LAUNCH_TIMEOUT_MS", 30000)
   });
 
-  const context = await browser.newContext({
-    extraHTTPHeaders:
-      request.sendAcceptLanguage ?? true
-        ? {
-            "Accept-Language": selection.locale
-          }
-        : undefined
-  });
+  const contextCache = new Map<string, BrowserContext>();
+  const navTimeout = getEnvInt("CAPTURE_NAV_TIMEOUT_MS", 90000);
 
-  try {
+  async function getContext(selection: PageSelection): Promise<BrowserContext> {
+    const host = new URL(selection.url).host;
+    const key = `${selection.locale}|${host}`;
+    const cached = contextCache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const context = await browser.newContext({
+      extraHTTPHeaders:
+        request.sendAcceptLanguage ?? true
+          ? {
+              "Accept-Language": selection.locale
+            }
+          : undefined
+    });
+
     const cookie = getLocaleCookieConfig(request, selection);
     if (cookie) {
       await context.addCookies([cookie]);
     }
 
+    contextCache.set(key, context);
+    return context;
+  }
+
+  async function capture(selection: PageSelection): Promise<CaptureResult> {
+    const context = await getContext(selection);
     const page = await context.newPage();
-    await page.setViewportSize({ width: selection.breakpoint, height: 1000 });
-    await page.goto(selection.url, {
-      waitUntil: "networkidle",
-      timeout: 90000
-    });
-    await page.waitForTimeout(300);
+    try {
+      await page.setViewportSize({ width: selection.breakpoint, height: 1000 });
+      await page.goto(selection.url, {
+        waitUntil: "networkidle",
+        timeout: navTimeout
+      });
+      await page.waitForTimeout(250);
 
-    const routeSlug = toRouteSlug(selection.url);
-    const artifactPath = join(
-      getBaseRunsDir(),
-      jobId,
-      selection.locale,
-      routeSlug,
-      `${selection.breakpoint}.png`
-    );
-    await mkdir(dirname(artifactPath), { recursive: true });
-    await page.screenshot({
-      path: artifactPath,
-      fullPage: true
-    });
+      const routeSlug = toRouteSlug(selection.url);
+      const artifactPath = join(
+        getBaseRunsDir(),
+        jobId,
+        selection.locale,
+        routeSlug,
+        `${selection.breakpoint}.png`
+      );
+      await mkdir(dirname(artifactPath), { recursive: true });
+      await page.screenshot({
+        path: artifactPath,
+        fullPage: true
+      });
 
-    const size = await page.evaluate(() => ({
-      width: Math.max(document.documentElement.scrollWidth, window.innerWidth),
-      height: Math.max(document.documentElement.scrollHeight, window.innerHeight)
-    }));
+      const size = await page.evaluate(() => ({
+        width: Math.max(document.documentElement.scrollWidth, window.innerWidth),
+        height: Math.max(document.documentElement.scrollHeight, window.innerHeight)
+      }));
 
-    return {
-      artifactPath,
-      width: size.width,
-      height: size.height
-    };
-  } finally {
-    await context.close();
+      return {
+        artifactPath,
+        width: size.width,
+        height: size.height
+      };
+    } finally {
+      await page.close();
+    }
+  }
+
+  async function close(): Promise<void> {
+    for (const context of contextCache.values()) {
+      await context.close();
+    }
     await browser.close();
   }
+
+  return {
+    capture,
+    close
+  };
 }

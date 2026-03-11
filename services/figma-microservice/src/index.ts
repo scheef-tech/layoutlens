@@ -101,12 +101,12 @@ app.post("/api/jobs", async (c) => {
   const rawTargets = Array.isArray(payload.targets) ? payload.targets : [];
   const cleanTargets = hasTargets
     ? rawTargets
-        .filter((target) => target && typeof target.url === "string" && typeof target.locale === "string")
-        .map((target) => ({
-          url: target.url,
-          locale: target.locale.toLowerCase(),
-          routeKey: target.routeKey
-        }))
+      .filter((target) => target && typeof target.url === "string" && typeof target.locale === "string")
+      .map((target) => ({
+        url: target.url,
+        locale: target.locale.toLowerCase(),
+        routeKey: target.routeKey
+      }))
     : undefined;
 
   if (cleanBreakpoints.length === 0) {
@@ -691,23 +691,40 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
       let discoveredRouteGroups = [];
       const selectedRouteIds = new Set();
 
-      function apiFetch(input, init) {
-        const headers = new Headers(init?.headers);
-        if (embedAuthToken) {
-          headers.set("Authorization", "Bearer " + embedAuthToken);
-        }
-        return fetch(input, {
-          ...init,
-          headers
-        }).then((response) => {
-          if (response.status === 401) {
-            setOutput({
-              error:
-                "Unauthorized. Open /dev inside client-portal so Clerk token handshake can authorize requests."
-            });
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      async function apiFetch(input, init) {
+        const withAuthHeaders = () => {
+          const headers = new Headers(init?.headers);
+          if (embedAuthToken) {
+            headers.set("Authorization", "Bearer " + embedAuthToken);
           }
-          return response;
+          return headers;
+        };
+
+        let response = await fetch(input, {
+          ...init,
+          headers: withAuthHeaders()
         });
+
+        if (response.status !== 401) {
+          return response;
+        }
+
+        await sleep(2000);
+        response = await fetch(input, {
+          ...init,
+          headers: withAuthHeaders()
+        });
+        if (response.status === 401) {
+          setOutput({
+            error:
+              "Unauthorized after token refresh retry. Open /dev inside client-portal so Clerk token handshake can authorize requests."
+          });
+        }
+        return response;
       }
 
       function setUiLocked(locked) {
@@ -956,7 +973,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
         renderArtifacts();
       }
 
-      async function pollJobUntilDone(jobId) {
+      async function pollJobUntilDone(jobReference) {
         activePollToken += 1;
         const pollToken = activePollToken;
         for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -964,7 +981,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 2500));
-          const statusRes = await apiFetch("/api/jobs/" + jobId, { cache: "no-store" });
+          const statusRes = await apiFetch("/api/jobs/" + jobReference, { cache: "no-store" });
           const status = await statusRes.json();
           setJobMonitorState(status);
           if (attempt % 4 === 0 || status.status === "success" || status.status === "failed") {
@@ -974,7 +991,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
             const jobAccessToken =
               typeof status.accessToken === "string" && status.accessToken.length > 0
                 ? status.accessToken
-                : jobId;
+                : jobReference;
             await loadArtifacts(jobAccessToken);
             showPostJobActions(jobAccessToken);
             return;
@@ -1165,7 +1182,9 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
 
         if (!json?.id) return;
         setJobMonitorState(json);
-        pollJobUntilDone(json.id);
+        const pollReference =
+          typeof json.accessToken === "string" && json.accessToken.length > 0 ? json.accessToken : json.id;
+        pollJobUntilDone(pollReference);
       });
 
       artifactLocaleFilterEl.addEventListener("change", renderArtifacts);

@@ -81,6 +81,68 @@ export type CaptureRunner = {
   close: () => Promise<void>;
 };
 
+async function warmPageByScrolling(page: Awaited<ReturnType<BrowserContext["newPage"]>>): Promise<void> {
+  const settleMs = Math.max(0, getEnvInt("CAPTURE_SCROLL_SETTLE_MS", 180));
+  const maxPasses = Math.max(1, getEnvInt("CAPTURE_SCROLL_MAX_PASSES", 3));
+
+  await page.evaluate(
+    async ({ settleMs: settleDelay, maxPasses: maxScrollPasses }) => {
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const root = document.scrollingElement || document.documentElement;
+
+      for (let pass = 0; pass < maxScrollPasses; pass += 1) {
+        let previousHeight = 0;
+        let sameHeightCount = 0;
+        let guard = 0;
+
+        while (guard < 800) {
+          guard += 1;
+          const currentHeight = root.scrollHeight;
+          const currentY = window.scrollY;
+          const viewportHeight = window.innerHeight || 1000;
+          const nextY = Math.min(currentY + viewportHeight, Math.max(0, currentHeight - viewportHeight));
+
+          window.scrollTo(0, nextY);
+
+          // Trigger lazy image loading if libraries rely on data-src/data-lazy-src.
+          const images = Array.from(document.querySelectorAll("img"));
+          for (const image of images) {
+            const img = image as HTMLImageElement;
+            if (!img.src) {
+              const candidate = img.getAttribute("data-src") || img.getAttribute("data-lazy-src");
+              if (candidate) {
+                img.src = candidate;
+              }
+            }
+            if (img.loading === "lazy") {
+              img.loading = "eager";
+            }
+            img.decoding = "sync";
+          }
+
+          await sleep(settleDelay);
+
+          const reachedBottom = window.scrollY + viewportHeight >= root.scrollHeight - 2;
+          if (currentHeight === previousHeight) {
+            sameHeightCount += 1;
+          } else {
+            sameHeightCount = 0;
+          }
+          previousHeight = currentHeight;
+
+          if (reachedBottom && sameHeightCount >= 2) {
+            break;
+          }
+        }
+      }
+
+      window.scrollTo(0, 0);
+      await sleep(settleDelay);
+    },
+    { settleMs, maxPasses }
+  );
+}
+
 export async function createCaptureRunner(
   request: CreateJobRequest,
   jobId: string
@@ -130,6 +192,8 @@ export async function createCaptureRunner(
         timeout: navTimeout
       });
       await page.waitForTimeout(250);
+      await warmPageByScrolling(page);
+      await page.waitForTimeout(Math.max(0, getEnvInt("CAPTURE_POST_SCROLL_WAIT_MS", 250)));
 
       const routeSlug = toRouteSlug(selection.url);
       const artifactPath = join(

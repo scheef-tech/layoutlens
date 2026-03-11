@@ -15,6 +15,7 @@ import { createJobAccessToken, parseJobReference } from "./job-access";
 const app = new Hono();
 const figmaApi = new FigmaApiClient();
 startJobCleanup();
+const devAuthDisabled = isDevAuthDisabled();
 
 app.use("*", cors());
 
@@ -27,6 +28,9 @@ app.get("/health", (c) =>
 );
 
 async function requireAdmin(c: Context) {
+  if (devAuthDisabled) {
+    return null;
+  }
   const auth = await verifyAdminFromAuthorizationHeader(c.req.header("authorization"));
   if (!auth) {
     return c.json({ error: "Unauthorized" }, 401);
@@ -299,7 +303,7 @@ app.get("/api/jobs/:jobId/artifacts/*", async (c) => {
   });
 });
 
-app.get("/dev", (c) => c.html(renderDevUi()));
+app.get("/dev", (c) => c.html(renderDevUi({ requireEmbedAuth: !devAuthDisabled })));
 
 const port = Number(getEnvOr("PORT", "8787"));
 console.log(`layoutlens-figma-microservice listening on http://localhost:${port}`);
@@ -309,7 +313,7 @@ export default {
   fetch: app.fetch
 };
 
-function renderDevUi(): string {
+function renderDevUi(config: { requireEmbedAuth: boolean }): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -661,6 +665,7 @@ function renderDevUi(): string {
       const artifactLocaleFilterEl = document.getElementById("artifactLocaleFilter");
       const artifactBreakpointFilterEl = document.getElementById("artifactBreakpointFilter");
       const authStateEl = document.getElementById("authState");
+      const requireEmbedAuth = ${config.requireEmbedAuth ? "true" : "false"};
       let allArtifacts = [];
       let activeJobId = "";
       let activePollToken = 0;
@@ -703,7 +708,10 @@ function renderDevUi(): string {
         authStateEl.classList.add("unlocked");
       }
 
-      if (window.parent !== window) {
+      if (!requireEmbedAuth) {
+        uiUnlocked = true;
+        setUiLocked(false);
+      } else if (window.parent !== window) {
         window.parent.postMessage({ type: "READY" }, "*");
       } else {
         setUiLocked(true);
@@ -724,7 +732,9 @@ function renderDevUi(): string {
           setUiLocked(!uiUnlocked);
         }
       });
-      setUiLocked(true);
+      if (requireEmbedAuth) {
+        setUiLocked(true);
+      }
 
       function setOutput(value) {
         outputEl.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -1191,4 +1201,9 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function isDevAuthDisabled(): boolean {
+  const raw = (getEnv("DEV_DISABLE_AUTH") || "").toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }

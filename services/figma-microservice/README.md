@@ -70,6 +70,7 @@ Capture jobs are now capture-only; the plugin imports artifacts into canvas.
 
 Environment flags:
 
+- `DEV_DISABLE_AUTH=false` (set `true` for local dev bypass of Clerk + embed lock)
 - `FIGMA_TEAM_ID=...` (for dev UI project/file picker default)
 - `CLERK_SECRET_KEY=...` (required for Clerk verification)
 - `CLERK_AUTHORIZED_PARTIES=https://app.scheef.tech,http://localhost:5173` (comma-separated)
@@ -80,6 +81,9 @@ Environment flags:
 - `FIGMA_API_TIMEOUT_MS=30000`
 - `PLAYWRIGHT_LAUNCH_TIMEOUT_MS=30000`
 - `CAPTURE_NAV_TIMEOUT_MS=90000`
+- `CAPTURE_SCROLL_SETTLE_MS=180` (pause between scroll steps to allow lazy loads)
+- `CAPTURE_SCROLL_MAX_PASSES=3` (repeat full-page scroll passes for infinite/lazy sections)
+- `CAPTURE_POST_SCROLL_WAIT_MS=250` (final settle wait before screenshot)
 
 Note on creating projects/files:
 

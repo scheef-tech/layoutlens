@@ -87,128 +87,50 @@ async function suppressCookieBanners(page: Awaited<ReturnType<BrowserContext["ne
     return;
   }
 
-  await page.evaluate(() => {
-    const cookieTerms = [
-      "cookie",
-      "consent",
-      "gdpr",
-      "privacy",
-      "zustimmung",
-      "datenschutz",
-      "essenzielle",
-      "essentiell"
-    ];
-    const actionTerms = [
-      "accept",
-      "agree",
-      "allow all",
-      "got it",
-      "ok",
-      "okay",
-      "continue",
-      "ablehnen",
-      "zustimmen",
-      "akzeptieren",
-      "alle akzeptieren",
-      "nur essenzielle",
-      "essenzielle"
-    ];
+  const cookieWaitMs = Math.max(0, getEnvInt("CAPTURE_COOKIE_WAIT_MS", 4000));
+  const clickTimeoutMs = Math.max(250, Math.min(cookieWaitMs, getEnvInt("CAPTURE_COOKIE_CLICK_TIMEOUT_MS", 1200)));
+  const pollMs = Math.max(100, getEnvInt("CAPTURE_COOKIE_POLL_MS", 250));
+  const postClickWaitMs = Math.max(0, getEnvInt("CAPTURE_COOKIE_POST_CLICK_WAIT_MS", 2200));
+  const maxAttempts = Math.max(1, Math.ceil(cookieWaitMs / pollMs));
+  const acceptLabels = [
+    /alle\s+akzeptieren/i,
+    /alles\s+akzeptieren/i,
+    /akzeptieren/i,
+    /accept/i,
+    /allow all/i,
+    /agree/i,
+    /zustimmen/i,
+    /continue/i
+  ];
+  const settingsLabel = /cookie[-\s]*einstellungen|settings|preferences|manage/i;
 
-    const textOf = (el: Element): string => (el.textContent || "").trim().toLowerCase();
-    const hasCookieTerm = (value: string): boolean => cookieTerms.some((term) => value.includes(term));
-    const hasActionTerm = (value: string): boolean => actionTerms.some((term) => value.includes(term));
-    const pageText = (document.body.textContent || "").toLowerCase();
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const visibleButtons = page.locator("button:visible, [role='button']:visible, a[role='button']:visible");
 
-    const isLikelyConsentContext = (element: Element): boolean => {
-      const ownText = textOf(element);
-      if (hasCookieTerm(ownText)) {
-        return true;
+    for (const label of acceptLabels) {
+      const textButton = visibleButtons.filter({ hasText: label }).first();
+      if (await textButton.count()) {
+        const buttonLabel = (await textButton.innerText()).trim();
+        if (settingsLabel.test(buttonLabel)) {
+          continue;
+        }
+        await textButton.click({ timeout: clickTimeoutMs });
+        await page.waitForTimeout(postClickWaitMs);
+        return;
       }
+    }
 
-      const container = element.closest("[role='dialog'], [role='alertdialog'], section, div, aside");
-      if (!container) {
-        return hasCookieTerm(pageText);
-      }
-      const containerText = textOf(container);
-      if (hasCookieTerm(containerText)) {
-        return true;
-      }
-      const style = window.getComputedStyle(container as HTMLElement);
-      return style.position === "fixed" || style.position === "sticky";
-    };
-
-    // Try clicking common consent CTA buttons first (best chance to persist cookie state).
-    const buttons = Array.from(
-      document.querySelectorAll(
-        "button, [role='button'], input[type='button'], input[type='submit'], a[role='button']"
-      )
+    const inputAccept = page.locator(
+      "input[type='submit']:visible[value*='akzept'], input[type='button']:visible[value*='akzept']"
     );
-    for (const button of buttons) {
-      const text = textOf(button);
-      if (!hasActionTerm(text)) {
-        continue;
-      }
-      if (isLikelyConsentContext(button) || hasCookieTerm(pageText)) {
-        (button as HTMLElement).click();
-      }
+    if (await inputAccept.count()) {
+      await inputAccept.first().click({ timeout: clickTimeoutMs });
+      await page.waitForTimeout(postClickWaitMs);
+      return;
     }
 
-    // Hide common cookie/consent containers and overlays.
-    const selectorCandidates = [
-      "[id*='cookie']",
-      "[class*='cookie']",
-      "[id*='consent']",
-      "[class*='consent']",
-      "[id*='gdpr']",
-      "[class*='gdpr']",
-      "[id*='zustimmung']",
-      "[class*='zustimmung']",
-      "[id*='datenschutz']",
-      "[class*='datenschutz']",
-      "[aria-label*='cookie']",
-      "[aria-label*='consent']",
-      "[aria-label*='zustimmung']",
-      "[aria-label*='datenschutz']",
-      "[data-testid*='cookie']",
-      "[data-testid*='consent']",
-      "[data-testid*='zustimmung']",
-      "[data-testid*='datenschutz']",
-      "[role='dialog']",
-      "[role='alertdialog']"
-    ];
-
-    const marked = new Set<Element>();
-    for (const selector of selectorCandidates) {
-      const nodes = Array.from(document.querySelectorAll(selector));
-      for (const node of nodes) {
-        marked.add(node);
-      }
-    }
-
-    for (const node of Array.from(document.querySelectorAll("*"))) {
-      const text = textOf(node);
-      if (!hasCookieTerm(text)) {
-        continue;
-      }
-      const element = node as HTMLElement;
-      const style = window.getComputedStyle(element);
-      if (style.position === "fixed" || style.position === "sticky") {
-        marked.add(node);
-      }
-    }
-
-    for (const node of marked) {
-      const element = node as HTMLElement;
-      element.style.setProperty("display", "none", "important");
-      element.style.setProperty("visibility", "hidden", "important");
-      element.style.setProperty("opacity", "0", "important");
-      element.style.setProperty("pointer-events", "none", "important");
-    }
-
-    // Remove body scroll locks often used by consent modals.
-    document.documentElement.style.removeProperty("overflow");
-    document.body.style.removeProperty("overflow");
-  });
+    await page.waitForTimeout(pollMs);
+  }
 }
 
 async function warmPageByScrolling(page: Awaited<ReturnType<BrowserContext["newPage"]>>): Promise<void> {
@@ -298,8 +220,8 @@ export async function createCaptureRunner(
       extraHTTPHeaders:
         request.sendAcceptLanguage ?? true
           ? {
-              "Accept-Language": selection.locale
-            }
+            "Accept-Language": selection.locale
+          }
           : undefined
     });
 

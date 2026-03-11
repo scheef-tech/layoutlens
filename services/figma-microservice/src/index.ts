@@ -323,12 +323,14 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0e1116;
-        --bg-soft: #151a22;
-        --border: #2d3644;
-        --text: #e9eef8;
-        --muted: #9facc1;
-        --accent: #76a8ff;
+        --bg: oklch(0.141 0.005 285.823);
+        --bg-soft: oklch(0.21 0.006 285.885);
+        --border: oklch(1 0 0 / 10%);
+        --text: oklch(0.985 0 0);
+        --muted: oklch(0.705 0.015 286.067);
+        --accent: oklch(0.6692 0.1607 245.011);
+        --field-bg: oklch(0.274 0.006 286.033);
+        --field-border: oklch(1 0 0 / 14%);
       }
       * { box-sizing: border-box; }
       body {
@@ -350,30 +352,44 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
       input, textarea, button, select {
         width: 100%;
         border-radius: 8px;
-        border: 1px solid var(--border);
-        background: #0b0f15;
+        border: 1px solid var(--field-border);
+        background: var(--field-bg);
         color: var(--text);
         padding: 10px;
       }
       textarea { min-height: 100px; resize: vertical; }
       button {
         cursor: pointer;
-        background: #1d2a3e;
-        border-color: #314561;
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
       }
-      button:hover { background: #253550; }
+      button:hover { filter: brightness(1.06); }
+      input + button,
+      textarea + button,
+      select + button,
+      .row + button {
+        margin-top: 8px;
+      }
       .btn-secondary {
-        background: #121925;
+        background: transparent;
+        border-color: var(--field-border);
+        color: var(--text);
+      }
+      .btn-secondary:hover {
+        background: var(--field-bg);
+        filter: none;
       }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
       .row { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
       .pages {
+        margin-top: 8px;
         max-height: 220px;
         overflow: auto;
         border: 1px solid var(--border);
         border-radius: 8px;
         padding: 8px;
-        background: #0b0f15;
+        background: var(--field-bg);
       }
       .pages label {
         margin: 0;
@@ -383,7 +399,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
         color: var(--text);
       }
       .pages details {
-        border-bottom: 1px solid #1b2331;
+        border-bottom: 1px solid var(--field-border);
         padding: 6px 0;
       }
       .pages summary {
@@ -421,7 +437,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
       .artifact-item {
         border: 1px solid var(--border);
         border-radius: 8px;
-        background: #0b0f15;
+        background: var(--field-bg);
         overflow: hidden;
       }
       .help {
@@ -450,7 +466,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
       .readonly-item {
         border: 1px solid var(--border);
         border-radius: 8px;
-        background: #0b0f15;
+        background: var(--field-bg);
         padding: 10px;
       }
       .readonly-item .k {
@@ -473,7 +489,7 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
         margin-top: 10px;
         border: 1px solid var(--border);
         border-radius: 8px;
-        background: #0b0f15;
+        background: var(--field-bg);
         padding: 10px;
       }
       .job-monitor .row-line {
@@ -495,14 +511,14 @@ function renderDevUi(config: { requireEmbedAuth: boolean }): string {
       .progress > div {
         height: 100%;
         width: 0%;
-        background: linear-gradient(90deg, #2f7cff 0%, #58a2ff 100%);
+        background: oklch(0.69 0.16 160.35);
         transition: width 200ms ease;
       }
       .post-job {
         margin-top: 10px;
         border: 1px solid var(--border);
         border-radius: 8px;
-        background: #0b0f15;
+        background: var(--field-bg);
         padding: 10px;
       }
       .post-job.hidden {

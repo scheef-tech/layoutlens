@@ -13,7 +13,8 @@
     "tauri:build": "tauri build",
     "microservice:dev": "cd services/figma-microservice && bun run dev",
     "microservice:typecheck": "cd services/figma-microservice && bun run typecheck",
-    "postinstall": "playwright install chromium webkit"
+    "postinstall": "playwright install chromium webkit",
+    "heatmap": "generate-heatmap"
   },
   "dependencies": {
     "@sveltejs/kit": "^2.5.0",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@internationalized/date": "^3.8.1",
     "@lucide/svelte": "^0.515.0",
+    "@scheef-tech/utility-belt": "^1.3.0",
     "@sveltejs/adapter-static": "^3.0.9",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
     "@tailwindcss/vite": "^4.0.0",

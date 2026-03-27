@@ -1,5 +1,8 @@
 # layoutlens
 
+![Commit Activity](assets/commit-heatmap.svg)
+
+
 To install dependencies:
 
 ```bash

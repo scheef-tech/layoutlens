@@ -88,3 +88,18 @@ describe("POST /api/jobs input validation", () => {
     expect(json.selections.map((s) => s.locale)).toEqual(["de", "de"]);
   });
 });
+
+describe("POST /api/sitemap/discover input validation", () => {
+  test("rejects non-http(s) and malformed base URLs with 400", async () => {
+    for (const baseUrl of ["file:///etc", "not a url"]) {
+      const res = await app.fetch(
+        new Request("http://localhost/api/sitemap/discover", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ baseUrl })
+        })
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+});

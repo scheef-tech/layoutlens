@@ -1,3 +1,6 @@
+import { getEnvInt } from "./env";
+import { isCapturableUrl } from "./validation";
+
 const LOC_REGEX = /<loc>\s*([^<]+)\s*<\/loc>/gim;
 const URL_BLOCK_REGEX = /<url\b[\s\S]*?<\/url>/gim;
 const LINK_TAG_REGEX = /<xhtml:link\b([^>]*)>/gim;
@@ -34,7 +37,12 @@ function extractLocTags(xml: string): string[] {
   return results;
 }
 
-function normalizeUrl(url: string): string {
+// Returns undefined for malformed or non-http(s) URLs. Bun's fetch() reads file:// URLs,
+// so a hostile sitemap must never be able to queue local paths for fetching.
+function normalizeUrl(url: string): string | undefined {
+  if (!isCapturableUrl(url)) {
+    return undefined;
+  }
   const normalized = new URL(url);
   normalized.hash = "";
   return normalized.toString();
@@ -56,7 +64,8 @@ async function fetchXml(url: string): Promise<string> {
   const res = await fetch(url, {
     headers: {
       Accept: "application/xml,text/xml,text/plain;q=0.9,*/*;q=0.8"
-    }
+    },
+    signal: AbortSignal.timeout(Math.max(1000, getEnvInt("SITEMAP_FETCH_TIMEOUT_MS", 15000)))
   });
   if (!res.ok) {
     throw new Error(`Failed sitemap fetch: ${res.status} ${res.statusText}`);
@@ -86,13 +95,13 @@ function extractUrlEntries(xml: string): ParsedUrlEntry[] {
   for (const blockMatch of xml.matchAll(URL_BLOCK_REGEX)) {
     const block = blockMatch[0];
     const loc = extractLocTags(block)[0];
-    if (!loc) {
+    if (!loc || !isCapturableUrl(loc)) {
       continue;
     }
     const alternates: Record<string, string> = {};
     for (const linkMatch of block.matchAll(LINK_TAG_REGEX)) {
       const attrs = parseLinkAttributes(linkMatch[1] || "");
-      if (!attrs.href || !attrs.hreflang || attrs.hreflang === "x-default") {
+      if (!attrs.href || !attrs.hreflang || attrs.hreflang === "x-default" || !isCapturableUrl(attrs.href)) {
         continue;
       }
       alternates[attrs.hreflang] = attrs.href;
@@ -183,7 +192,7 @@ export async function discoverSitemaps(
 
   while (queue.length > 0 && sourceSitemaps.length < maxSitemaps && pageUrls.length < maxUrls) {
     const next = normalizeUrl(queue.shift()!);
-    if (visited.has(next)) {
+    if (!next || visited.has(next)) {
       continue;
     }
     visited.add(next);
@@ -204,8 +213,14 @@ export async function discoverSitemaps(
 
     const locs = extractLocTags(xml);
     for (const loc of locs) {
-      if (isSitemapXmlUrl(loc) && !visited.has(normalizeUrl(loc))) {
-        queue.push(loc);
+      const normalizedLoc = normalizeUrl(loc);
+      if (!normalizedLoc) {
+        continue;
+      }
+      if (isSitemapXmlUrl(loc)) {
+        if (!visited.has(normalizedLoc)) {
+          queue.push(loc);
+        }
         continue;
       }
       if (!pageSet.has(loc)) {

@@ -55,6 +55,9 @@ app.post("/api/sitemap/discover", async (c) => {
   if (!payload?.baseUrl) {
     return c.json({ error: "baseUrl is required" }, 400);
   }
+  if (!isCapturableUrl(payload.baseUrl)) {
+    return c.json({ error: "baseUrl must be an absolute http(s) URL" }, 400);
+  }
 
   const fallbackDefaultLocale = getEnv("SITEMAP_DEFAULT_LOCALE");
   const discovered = await discoverSitemaps(

@@ -1,9 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::{Path, PathBuf}, process::{Stdio, Command}};
+use std::{fs, path::PathBuf, process::{Stdio, Command}};
 use tauri::{Emitter, Manager, WebviewWindowBuilder};
 use walkdir::WalkDir;
+
+mod zip_safety;
 
 // Embed the screenshot script at compile time so we don't rely on locating it at runtime
 const SCREENSHOT_TS: &str = include_str!("../../scripts/screenshot.ts");
@@ -260,7 +262,8 @@ async fn import_gallery(app: tauri::AppHandle, args: ImportArgs) -> Result<Strin
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     for i in 0..zipr.len() {
         let mut f = zipr.by_index(i).map_err(|e| e.to_string())?;
-        let out_path = out_dir.join(Path::new(f.name()));
+        let out_path = zip_safety::safe_extract_path(&out_dir, f.name())
+            .ok_or_else(|| format!("refusing unsafe zip entry: {}", f.name()))?;
         if f.name().ends_with('/') {
             fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
         } else {

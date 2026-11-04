@@ -47,8 +47,26 @@ export function createJob(payload: CreateJobRequest): ImportJob {
 
   jobs.set(job.id, job);
   jobInputs.set(job.id, payload);
-  void runJob(job.id);
+  void runJob(job.id).catch((error) => markJobCrashed(job.id, error));
   return job;
+}
+
+// runJob is fire-and-forget. Without this handler a browser launch failure or a failed
+// manifest write became an unhandled rejection and left the job in "running" forever,
+// so pollers (dev UI, Figma plugin) never saw a terminal state.
+function markJobCrashed(jobId: string, error: unknown): void {
+  const job = jobs.get(jobId);
+  const message = error instanceof Error ? error.message : "Unknown job error";
+  logEvent("ERROR", "job.crashed", {
+    jobId,
+    error: message.replaceAll(/\s+/g, " ").slice(0, 240)
+  });
+  if (!job) {
+    return;
+  }
+  job.status = "failed";
+  job.warnings.push(`Job aborted: ${message}`);
+  job.updatedAt = new Date().toISOString();
 }
 
 export function startJobCleanup(): void {

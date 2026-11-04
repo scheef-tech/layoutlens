@@ -13,6 +13,7 @@
     "tauri:build": "tauri build",
     "microservice:dev": "cd services/figma-microservice && bun run dev",
     "microservice:typecheck": "cd services/figma-microservice && bun run typecheck",
+    "microservice:test": "cd services/figma-microservice && bun run test",
     "postinstall": "playwright install chromium webkit",
     "heatmap": "generate-heatmap"
   },

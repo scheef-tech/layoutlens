@@ -11,6 +11,7 @@ import type { CreateJobRequest, DiscoverSitemapRequest } from "./types";
 import { getEnv, getEnvOr } from "./env";
 import { verifyAdminFromAuthorizationHeader } from "./auth";
 import { createJobAccessToken, parseJobReference } from "./job-access";
+import { isCapturableUrl, isSafeLocale, isValidBreakpoint } from "./validation";
 
 const app = new Hono();
 const figmaApi = new FigmaApiClient();
@@ -97,7 +98,7 @@ app.post("/api/jobs", async (c) => {
 
   const cleanBreakpoints = payload.breakpoints
     .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value) && value > 0);
+    .filter((value) => isValidBreakpoint(value));
   const rawTargets = Array.isArray(payload.targets) ? payload.targets : [];
   const cleanTargets = hasTargets
     ? rawTargets
@@ -108,6 +109,17 @@ app.post("/api/jobs", async (c) => {
         routeKey: target.routeKey
       }))
     : undefined;
+
+  const urlsToCapture = hasTargets ? (cleanTargets || []).map((target) => target.url) : payload.pages;
+  const localesToCapture = hasTargets ? (cleanTargets || []).map((target) => target.locale) : payload.locales;
+  const invalidUrl = urlsToCapture.find((url) => !isCapturableUrl(url));
+  if (invalidUrl !== undefined) {
+    return c.json({ error: `Only http(s) URLs can be captured: ${String(invalidUrl).slice(0, 200)}` }, 400);
+  }
+  const invalidLocale = localesToCapture.find((locale) => !isSafeLocale(locale));
+  if (invalidLocale !== undefined) {
+    return c.json({ error: `Invalid locale: ${String(invalidLocale).slice(0, 50)}` }, 400);
+  }
 
   if (cleanBreakpoints.length === 0) {
     return c.json({ error: "No valid breakpoints provided" }, 400);

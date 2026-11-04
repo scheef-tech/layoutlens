@@ -23,6 +23,10 @@ if (!runDirArg) {
 }
 const runDir = runDirArg;
 const port = Number(portArg || 7777);
+// Bind to loopback only: Bun.serve defaults to 0.0.0.0, which exposed every screenshot of
+// the run (and the manifest) to anyone on the same network. The Figma plugin connects via
+// http://localhost, so loopback is enough. Override with LAYOUTLENS_SERVE_HOST if needed.
+const hostname = process.env.LAYOUTLENS_SERVE_HOST || "127.0.0.1";
 
 function normalizePath(p: string): string {
   try {
@@ -36,6 +40,16 @@ function isPathInside(parent: string, child: string): boolean {
   const a = normalizePath(parent).replace(/\/+$/, "");
   const b = normalizePath(child);
   return b === a || b.startsWith(a + "/");
+}
+
+// searchParams.get() already decodes once; the legacy second decode throws a URIError on
+// a stray "%" which used to crash the request handler.
+function decodeAbsParam(abs: string): string | null {
+  try {
+    return decodeURIComponent(abs);
+  } catch {
+    return null;
+  }
 }
 
 function corsHeaders(extra: Record<string, string> = {}): HeadersInit {
@@ -91,7 +105,9 @@ async function handleMeta(url: URL): Promise<Response> {
   const abs = url.searchParams.get("abs");
   if (!abs)
     return new Response("Bad Request", { status: 400, headers: corsHeaders() });
-  const decoded = decodeURIComponent(abs);
+  const decoded = decodeAbsParam(abs);
+  if (decoded === null)
+    return new Response("Bad Request", { status: 400, headers: corsHeaders() });
   if (!isPathInside(runDir, decoded)) {
     return new Response("Forbidden", { status: 403, headers: corsHeaders() });
   }
@@ -107,7 +123,9 @@ async function handleFile(url: URL): Promise<Response> {
   const abs = url.searchParams.get("abs");
   if (!abs)
     return new Response("Bad Request", { status: 400, headers: corsHeaders() });
-  const decoded = decodeURIComponent(abs);
+  const decoded = decodeAbsParam(abs);
+  if (decoded === null)
+    return new Response("Bad Request", { status: 400, headers: corsHeaders() });
   if (!isPathInside(runDir, decoded)) {
     return new Response("Forbidden", { status: 403, headers: corsHeaders() });
   }
@@ -224,6 +242,7 @@ async function handleFile(url: URL): Promise<Response> {
 }
 
 const server = Bun.serve({
+  hostname,
   port,
   fetch: async (req) => {
     const url = new URL(req.url);
@@ -249,6 +268,6 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Serving ${runDir} at http://localhost:${port}`);
+console.log(`Serving ${runDir} at http://${hostname}:${port}`);
 
 export {};

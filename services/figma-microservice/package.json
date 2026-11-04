@@ -11,8 +11,8 @@
     "postinstall": "playwright install chromium"
   },
   "dependencies": {
-    "@clerk/backend": "^3.2.0",
-    "hono": "^4.9.6",
+    "@clerk/backend": "^3.26.6",
+    "hono": "^4.13.16",
     "playwright": "^1.55.0",
     "sharp": "^0.34.5"
   },

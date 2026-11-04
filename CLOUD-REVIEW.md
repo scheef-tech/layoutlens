@@ -77,3 +77,40 @@ Further candidates, smaller in value: robust per-shot error handling in `scripts
 ## Verified
 
 Commands run in this session (results abbreviated):
+
+```text
+git fetch origin main                                   -> main = b5a41fb (= starting branch)
+git checkout -b cloud-review/2026-11-05 origin/main     -> ok
+git log --since=60.days --name-only                     -> only assets/commit-heatmap.svg changed (bot); last code change: 140fde9 README
+git log --all ... -- '*.env' / token-prefix grep        -> no committed env files or tokens
+bun --version / cargo --version                         -> 1.4.4 / 1.97.0
+cd services/figma-microservice && bun install --frozen-lockfile --ignore-scripts -> 27 packages
+bun test (before changes)                               -> "0 test files", exit 1
+bunx tsc --noEmit (before)                              -> exit 0
+bun audit (root)                                        -> 110 vulnerabilities (1 critical, 44 high, 53 moderate, 12 low)
+bun audit (microservice, before)                        -> 40 vulnerabilities (1 critical, 8 high, 29 moderate, 2 low)
+bun -e 'fetch("file://…/probe.xml")'                    -> 200: Bun fetch reads local files
+node pwprobe.cjs (Playwright goto file:///etc/hostname) -> "file:// navigation ok, status 200"
+bun test --isolate (per fix, with fix stashed)          -> new tests fail as expected
+bun update hono @clerk/backend --ignore-scripts         -> hono 4.13.16, @clerk/backend 3.26.6
+bun audit (microservice, after)                         -> 3 vulnerabilities (3 high, all sharp <0.35)
+rm -rf node_modules && bun install --frozen-lockfile --ignore-scripts -> ok (lockfile consistent)
+bun run test (microservice, head)                       -> 20 pass, 0 fail
+bunx tsc --noEmit (microservice, head)                  -> exit 0
+bun test scripts (root, head)                           -> 4 pass, 0 fail
+rustc --edition 2021 --test src-tauri/src/zip_safety.rs -> 3 passed
+rustfmt --edition 2021 --check src-tauri/src/main.rs    -> parses (formatting diff only, pre-existing style)
+cargo check (src-tauri)                                 -> fails: gdk-3.0.pc / WebKitGTK system libs missing
+bun install (root)                                      -> 401 from npm.pkg.github.com for @scheef-tech/utility-belt (needs ST_REGISTRY_TOKEN)
+```
+
+## Not checked
+
+- **SvelteKit frontend build / svelte-check**: root `bun install` needs `ST_REGISTRY_TOKEN` for the private `@scheef-tech/utility-belt` package (401); no credentials were looked for. Frontend code was reviewed by reading only (no `{@html}` or `innerHTML` sinks found outside shadcn components).
+- **Full Rust build**: `cargo check` needs GTK/WebKitGTK dev libraries. The Zip Slip helper was compiled and tested standalone; its call site in `main.rs` was parse-checked with rustfmt and reviewed by hand.
+- **Figma plugin build** (`plugins/layoutlens-importer`): dependencies not installed; reviewed by reading.
+- **Real Clerk tokens / JWKS, Figma API, Docker image build, Coolify deployment**: need external accounts or services; auth was tested only offline (malformed and missing tokens).
+- **End-to-end capture of real websites**: only the `file://` navigation probe ran with the pre-installed Chromium; capture is mocked in tests.
+- **CI and deploy files** (`.github/workflows/heatmap.yml`, `Dockerfile`): reviewed, intentionally left unchanged.
+- **Windows-specific path handling** in `serve-run.ts` and the artifact route: the app targets macOS and the service runs on Linux.
+- **`sharp` 0.35 compatibility**: upgrade crosses the declared range, left for a separate change.
